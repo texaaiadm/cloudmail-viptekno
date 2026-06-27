@@ -11,6 +11,10 @@ interface LayoutProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
   defaultCredentials?: Partial<CloudflareCredentials>;
+  isVoucherVerified?: boolean;
+  voucherEmail?: string;
+  onVoucherLogout?: () => void;
+  onVoucherLogin?: () => void;
 }
 
 export const Layout: React.FC<LayoutProps> = ({ 
@@ -19,7 +23,10 @@ export const Layout: React.FC<LayoutProps> = ({
   onSaveCredentials, 
   activeTab, 
   onTabChange,
-  defaultCredentials
+  defaultCredentials,
+  isVoucherVerified,
+  voucherEmail,
+  onVoucherLogout
 }) => {
   const [showConfig, setShowConfig] = useState(false);
   const [form, setForm] = useState<CloudflareCredentials>(
@@ -108,7 +115,16 @@ export const Layout: React.FC<LayoutProps> = ({
     { id: 'subdomains', label: 'Subdomain', icon: 'M4 6h6M4 12h8M4 18h10M16 6h4M18 4v4M16 18h4' },
     { id: 'emails', label: 'Email & Forward', icon: 'M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z' },
     { id: 'mailbox', label: 'Mailbox', icon: 'M4 4h16v4H4zm0 6h10v10H4zm12 0h4v10h-4z' },
+    { id: 'cleanup', label: 'Pembersihan', icon: 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16' },
   ];
+
+  // Admin-only items (not shown in sidebar, only via /admin route)
+  const adminNavItems = [
+    { id: 'members', label: 'Members', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z' },
+  ];
+
+  const isAdminRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/admin');
+  const displayNavItems = isAdminRoute ? adminNavItems : navItems;
 
   // handleSettingClick removed
 
@@ -126,7 +142,7 @@ export const Layout: React.FC<LayoutProps> = ({
         </div>
 
         <nav className="flex-1 p-4 space-y-1">
-          {navItems.map((item) => (
+          {displayNavItems.map((item) => (
             <button
               key={item.id}
               onClick={() => onTabChange(item.id)}
@@ -160,7 +176,7 @@ export const Layout: React.FC<LayoutProps> = ({
 
       {/* Mobile Bottom Navigation */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-2 z-50 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-        {navItems.map((item) => (
+        {displayNavItems.map((item) => (
             <button
               key={item.id}
               onClick={() => onTabChange(item.id)}
@@ -189,11 +205,33 @@ export const Layout: React.FC<LayoutProps> = ({
                </svg>
              </div>
              <h2 className="text-lg font-semibold text-slate-800">
-                {navItems.find(n => n.id === activeTab)?.label}
+                {[...navItems, ...adminNavItems].find(n => n.id === activeTab)?.label}
              </h2>
           </div>
           
           <div className="flex items-center gap-2">
+            {/* Voucher Status */}
+            <div className="flex items-center gap-2 mr-2">
+              {isVoucherVerified ? (
+                <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-1.5">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span className="text-xs font-medium text-green-700 truncate max-w-[120px] hidden sm:inline">{voucherEmail}</span>
+                  <button 
+                    onClick={onVoucherLogout}
+                    className="text-xs text-red-500 hover:text-red-700 font-medium ml-1"
+                    title="Logout Voucher"
+                  >
+                    Keluar
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                  <div className="w-2 h-2 bg-amber-500 rounded-full"></div>
+                  <span className="text-xs font-medium text-amber-700 hidden sm:inline">Belum Login</span>
+                </div>
+              )}
+            </div>
+
             {credentials && (
               <div 
                 className="text-xs md:text-sm hidden sm:flex items-center gap-2 font-bold animate-pulse cursor-pointer select-all mr-2"

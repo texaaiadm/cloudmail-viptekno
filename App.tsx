@@ -15,8 +15,6 @@ const firestoreUrl = '/creds?action=get_file&filename=cloudmail-vip';
 const cleanupBackupKey = 'cleanup_backup_v1';
 const cleanupAuditKey = 'cleanup_audit_v1';
 const cleanupMonitoringKey = 'cleanup_monitoring_url_v1';
-const adminPasswordKey = 'admin_cleanup_password_hash_v1';
-const adminAuthKey = 'admin_cleanup_authed_v1';
 
 type MailboxAccount = {
   id?: string;
@@ -81,6 +79,17 @@ type CleanupValidation = {
   ok: boolean;
 };
 
+type MemberRecord = {
+  id: string;
+  name: string;
+  email: string;
+  wa: string;
+  exp?: number;
+  cooldownHours?: number;
+  cooldownEnabled?: boolean;
+  createdAt?: string;
+};
+
 const App: React.FC = () => {
   // --- Credentials & API ---
   const loadCredentials = (): CloudflareCredentials | null => {
@@ -93,7 +102,29 @@ const App: React.FC = () => {
     }
   };
 
-  const [activeTab, setActiveTab] = useState('subdomains');
+  const isAdminRoute = window.location.pathname.startsWith('/admin');
+  const [activeTab, setActiveTab] = useState(isAdminRoute ? 'members' : 'subdomains');
+  const [adminAuthed, setAdminAuthed] = useState(() => sessionStorage.getItem('admin_authed') === 'true');
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [adminAuthError, setAdminAuthError] = useState('');
+  const ADMIN_PASSWORD = 'Tekno@Project03';
+
+  const handleAdminLogin = () => {
+    if (adminPasswordInput === ADMIN_PASSWORD) {
+      setAdminAuthed(true);
+      sessionStorage.setItem('admin_authed', 'true');
+      setAdminAuthError('');
+      setAdminPasswordInput('');
+    } else {
+      setAdminAuthError('Password salah!');
+    }
+  };
+
+  const handleAdminLogout = () => {
+    sessionStorage.removeItem('admin_authed');
+    setAdminAuthed(false);
+    setAdminPasswordInput('');
+  };
   const [credentials, setCredentials] = useState<CloudflareCredentials | null>(loadCredentials);
   const [fetchedCredentials, setFetchedCredentials] = useState<Partial<CloudflareCredentials> | undefined>(undefined);
 
@@ -114,11 +145,6 @@ const App: React.FC = () => {
   const [cleanupValidation, setCleanupValidation] = useState<CleanupValidation | null>(null);
   const [cleanupNotice, setCleanupNotice] = useState<string | null>(null);
   const [monitoringUrl, setMonitoringUrl] = useState('');
-  const [adminAuthed, setAdminAuthed] = useState(false);
-  const [adminMode, setAdminMode] = useState<'setup' | 'login'>('login');
-  const [adminPasswordInput, setAdminPasswordInput] = useState('');
-  const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('');
-  const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
   const [mailboxAutoLoginEmail, setMailboxAutoLoginEmail] = useState<string>('');
   const [mailboxAutoLoginPassword, setMailboxAutoLoginPassword] = useState<string>('');
 
@@ -126,6 +152,24 @@ const App: React.FC = () => {
   const [voucherInput, setVoucherInput] = useState('');
   const [voucherError, setVoucherError] = useState<string | null>(null);
   const [voucherLoading, setVoucherLoading] = useState(false);
+
+  // --- Member Management State (from AdminApp) ---
+  const [members, setMembers] = useState<MemberRecord[]>([]);
+  const [newEmail, setNewEmail] = useState('');
+  const [newWa, setNewWa] = useState('');
+  const [memberDurationMode, setMemberDurationMode] = useState<'monthly' | 'custom'>('monthly');
+  const [memberDurationValue, setMemberDurationValue] = useState<number>(1);
+  const [newCooldownHours, setNewCooldownHours] = useState<number>(8);
+  const [memberActionLoading, setMemberActionLoading] = useState(false);
+
+  // State edit inline per member
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [editEmail, setEditEmail] = useState('');
+  const [editWa, setEditWa] = useState('');
+  const [editDurationMode, setEditDurationMode] = useState<'monthly' | 'custom'>('monthly');
+  const [editDurationValue, setEditDurationValue] = useState<number>(1);
+  const [editCooldownHours, setEditCooldownHours] = useState<number>(8);
+  const [editCooldownEnabled, setEditCooldownEnabled] = useState<boolean>(true);
 
   useEffect(() => {
     const verified = localStorage.getItem('isVoucherVerified');
@@ -167,6 +211,8 @@ const App: React.FC = () => {
 
       if (memberRecord) {
         const expMatch = memberRecord.content.match(/exp:(\d+)/);
+        const cooldownMatch = memberRecord.content.match(/cooldown_h:(\d+)/);
+        const cooldownOnMatch = memberRecord.content.match(/cooldown_on:(\d+)/);
         if (expMatch) {
            const expTime = parseInt(expMatch[1]);
            if (expTime < Date.now()) {
@@ -177,6 +223,18 @@ const App: React.FC = () => {
            localStorage.setItem('voucherExp', expTime.toString());
         } else {
            localStorage.removeItem('voucherExp');
+        }
+
+        // Simpan cooldown custom per member
+        if (cooldownMatch) {
+          localStorage.setItem('memberCooldownHours', cooldownMatch[1]);
+        } else {
+          localStorage.removeItem('memberCooldownHours');
+        }
+        if (cooldownOnMatch) {
+          localStorage.setItem('memberCooldownEnabled', cooldownOnMatch[1]);
+        } else {
+          localStorage.setItem('memberCooldownEnabled', '1'); // default on
         }
 
         setIsVoucherVerified(true);
@@ -226,13 +284,6 @@ const App: React.FC = () => {
     }
   }, [monitoringUrl]);
 
-  useEffect(() => {
-    const hash = localStorage.getItem(adminPasswordKey);
-    setAdminMode(hash ? 'login' : 'setup');
-    const authed = localStorage.getItem(adminAuthKey) === 'true';
-    setAdminAuthed(authed && !!hash);
-  }, []);
-
   // --- Step 1: Subdomain State ---
   const [subdomainInput, setSubdomainInput] = useState('');
   const [subdomainLoading, setSubdomainLoading] = useState(false);
@@ -273,7 +324,14 @@ const App: React.FC = () => {
   // Cooldown Timer Logic (Merged Local + DNS)
   useEffect(() => {
     const checkCooldown = () => {
-        let lastCreatedTime = 0;
+            // Jika cooldown dimatikan untuk member ini, skip
+            const cooldownEnabled = localStorage.getItem('memberCooldownEnabled');
+            if (cooldownEnabled === '0') {
+              setCooldownTime(null);
+              return;
+            }
+
+            let lastCreatedTime = 0;
 
         // 1. Check Local Storage
         const localLast = localStorage.getItem('last_subdomain_created');
@@ -301,9 +359,11 @@ const App: React.FC = () => {
 
         if (lastCreatedTime > 0) {
             const diff = Date.now() - lastCreatedTime;
-            const eightHours = 8 * 60 * 60 * 1000;
-            if (diff < eightHours) {
-                const remaining = eightHours - diff;
+            const storedCooldown = localStorage.getItem('memberCooldownHours');
+            const cooldownHours = storedCooldown ? parseInt(storedCooldown) : 8;
+            const cooldownMs = cooldownHours * 60 * 60 * 1000;
+            if (diff < cooldownMs) {
+                const remaining = cooldownMs - diff;
                 const h = Math.floor(remaining / (1000 * 60 * 60));
                 const m = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
                 const s = Math.floor((remaining % (1000 * 60)) / 1000);
@@ -741,56 +801,164 @@ const App: React.FC = () => {
     }));
   };
 
-  const hashValue = async (value: string) => {
-    const msgBuffer = new TextEncoder().encode(value);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  // --- Member Management Functions ---
+  const fetchMemberData = async () => {
+    if (!api || !settings) return;
+    try {
+      const domainName = settings.name.replace(/\.$/, '');
+      const zoneRecords = await api.listZoneDnsRecords();
+      const records = zoneRecords.result || [];
+      const memberPrefix = `_member.${domainName}`;
+      const parsedMembers: MemberRecord[] = records
+        .filter((r: any) => r.type === 'TXT' && r.name === memberPrefix)
+        .map((r: any) => {
+          const content = r.content || '';
+          const emailMatch = content.match(/email:([^|]+)/);
+          const waMatch = content.match(/wa:([^|]+)/);
+          const expMatch = content.match(/exp:(\d+)/);
+          const cooldownMatch = content.match(/cooldown_h:(\d+)/);
+          const cooldownOnMatch = content.match(/cooldown_on:(\d+)/);
+          return {
+            id: r.id,
+            name: r.name,
+            email: emailMatch ? emailMatch[1] : 'Unknown',
+            wa: waMatch ? waMatch[1] : '',
+            exp: expMatch ? parseInt(expMatch[1]) : undefined,
+            cooldownHours: cooldownMatch ? parseInt(cooldownMatch[1]) : undefined,
+            cooldownEnabled: cooldownOnMatch ? cooldownOnMatch[1] === '1' : true,
+            createdAt: r.created_on
+          };
+        });
+      setMembers(parsedMembers);
+    } catch (err: any) {
+      console.error('Gagal memuat member:', err);
+    }
   };
 
-  const handleAdminSetup = async () => {
-    setAdminAuthError(null);
-    if (!adminPasswordInput || adminPasswordInput.length < 6) {
-      setAdminAuthError('Password minimal 6 karakter.');
-      return;
+  const handleAddMember = async () => {
+    if (!api || !settings) return;
+    setMemberActionLoading(true);
+    try {
+      const domainName = settings.name.replace(/\.$/, '');
+      const expTimestamp = memberDurationMode === 'monthly'
+        ? Date.now() + (memberDurationValue * 30 * 24 * 60 * 60 * 1000)
+        : Date.now() + (memberDurationValue * 24 * 60 * 60 * 1000);
+      const content = `email:${newEmail}|wa:${newWa}|exp:${expTimestamp}|cooldown_h:${newCooldownHours}|cooldown_on:1`;
+      await api.createZoneDnsRecord({
+        type: 'TXT',
+        name: `_member.${domainName}`,
+        content: content,
+        ttl: 1
+      });
+      setNewEmail('');
+      setNewWa('');
+      setNewCooldownHours(8);
+      setMemberDurationValue(1);
+      await fetchMemberData();
+    } catch (err: any) {
+      alert('Gagal menambah member: ' + err.message);
+    } finally {
+      setMemberActionLoading(false);
     }
-    if (adminPasswordInput !== adminPasswordConfirm) {
-      setAdminAuthError('Konfirmasi password tidak sama.');
-      return;
-    }
-    const hash = await hashValue(adminPasswordInput);
-    localStorage.setItem(adminPasswordKey, hash);
-    localStorage.setItem(adminAuthKey, 'true');
-    setAdminAuthed(true);
-    setAdminMode('login');
-    setAdminPasswordInput('');
-    setAdminPasswordConfirm('');
   };
 
-  const handleAdminLogin = async () => {
-    setAdminAuthError(null);
-    const storedHash = localStorage.getItem(adminPasswordKey);
-    if (!storedHash) {
-      setAdminMode('setup');
-      setAdminAuthError('Password admin belum disetel.');
-      return;
+  const handleDeleteMember = async (id: string) => {
+    if (!api) return;
+    if (!confirm('Yakin ingin menghapus member ini?')) return;
+    setMemberActionLoading(true);
+    try {
+      await api.deleteZoneDnsRecord(id);
+      await fetchMemberData();
+    } catch (err: any) {
+      alert('Gagal menghapus member: ' + err.message);
+    } finally {
+      setMemberActionLoading(false);
     }
-    const hash = await hashValue(adminPasswordInput);
-    if (hash !== storedHash) {
-      setAdminAuthError('Password salah.');
-      return;
-    }
-    localStorage.setItem(adminAuthKey, 'true');
-    setAdminAuthed(true);
-    setAdminPasswordInput('');
   };
 
-  const handleAdminLogout = () => {
-    localStorage.removeItem(adminAuthKey);
-    setAdminAuthed(false);
-    setAdminPasswordInput('');
-    setAdminPasswordConfirm('');
+  const handleStartEdit = (member: MemberRecord) => {
+    setEditingMemberId(member.id);
+    setEditEmail(member.email);
+    setEditWa(member.wa);
+    setEditCooldownHours(member.cooldownHours ?? 8);
+    setEditCooldownEnabled(member.cooldownEnabled ?? true);
+    if (member.exp) {
+      const remainingMs = member.exp - Date.now();
+      if (remainingMs > 0) {
+        const remainingDays = Math.ceil(remainingMs / (24 * 60 * 60 * 1000));
+        if (remainingDays % 30 === 0 && remainingDays >= 30) {
+          setEditDurationMode('monthly');
+          setEditDurationValue(remainingDays / 30);
+        } else {
+          setEditDurationMode('custom');
+          setEditDurationValue(remainingDays);
+        }
+      } else {
+        setEditDurationMode('custom');
+        setEditDurationValue(1);
+      }
+    } else {
+      setEditDurationMode('monthly');
+      setEditDurationValue(1);
+    }
   };
+
+  const handleCancelEdit = () => setEditingMemberId(null);
+
+  const handleSaveEdit = async (member: MemberRecord) => {
+    if (!api || !settings) return;
+    setMemberActionLoading(true);
+    try {
+      const expTimestamp = editDurationMode === 'monthly'
+        ? Date.now() + (editDurationValue * 30 * 24 * 60 * 60 * 1000)
+        : Date.now() + (editDurationValue * 24 * 60 * 60 * 1000);
+      const content = `email:${editEmail}|wa:${editWa}|exp:${expTimestamp}|cooldown_h:${editCooldownHours}|cooldown_on:${editCooldownEnabled ? '1' : '0'}`;
+      await api.updateZoneDnsRecord(member.id, {
+        type: 'TXT',
+        name: member.name,
+        content: content,
+        ttl: 1
+      });
+      setEditingMemberId(null);
+      await fetchMemberData();
+    } catch (err: any) {
+      alert('Gagal menyimpan edit: ' + err.message);
+    } finally {
+      setMemberActionLoading(false);
+    }
+  };
+
+  const handleToggleCooldown = async (member: MemberRecord, enabled: boolean) => {
+    if (!api || !settings) return;
+    setMemberActionLoading(true);
+    try {
+      const exp = member.exp ?? (Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const content = `email:${member.email}|wa:${member.wa}|exp:${exp}|cooldown_h:${member.cooldownHours ?? 8}|cooldown_on:${enabled ? '1' : '0'}`;
+      await api.updateZoneDnsRecord(member.id, {
+        type: 'TXT',
+        name: member.name,
+        content: content,
+        ttl: 1
+      });
+      setMembers(prev => prev.map(m => m.id === member.id ? { ...m, cooldownEnabled: enabled } : m));
+    } catch (err: any) {
+      alert('Gagal toggle cooldown: ' + err.message);
+    } finally {
+      setMemberActionLoading(false);
+    }
+  };
+
+  const formatWaLink = (wa: string) => {
+    let cleanWa = wa.replace(/\D/g, '');
+    if (cleanWa.startsWith('0')) cleanWa = '62' + cleanWa.substring(1);
+    else if (!cleanWa.startsWith('62')) cleanWa = '62' + cleanWa;
+    return `https://wa.me/${cleanWa}`;
+  };
+
+  // Load members when settings change
+  useEffect(() => {
+    if (api && settings) fetchMemberData();
+  }, [api, settings]);
 
   const validateCleanup = async (domainNameOverride?: string) => {
     if (!api || !settings) return;
@@ -1506,7 +1674,7 @@ const App: React.FC = () => {
     return null;
   }, [mailboxSelectedMessage]);
 
-  const isAdminRoute = window.location.pathname.startsWith('/admin');
+  const memberCooldownDisplay = parseInt(localStorage.getItem('memberCooldownHours') || '8');
 
   const cleanupPanel = (
     <div className="pt-6 border-t border-slate-100 space-y-4">
@@ -1671,85 +1839,45 @@ const App: React.FC = () => {
     );
   }
 
-  if (isAdminRoute) {
+  // Admin Password Gate — hanya muncul di /admin
+  if (isAdminRoute && !adminAuthed) {
     return (
-      <Layout
-        credentials={credentials}
-        onSaveCredentials={saveCredentials}
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        defaultCredentials={fetchedCredentials}
-      >
-        <div className="max-w-3xl mx-auto space-y-6">
-          {error && (
-            <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-center justify-between">
-              <span>{error}</span>
-              <button onClick={() => setError(null)}>&times;</button>
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 relative overflow-hidden">
+        <div className="absolute top-[-20%] left-[-10%] w-96 h-96 bg-blue-600 rounded-full mix-blend-multiply filter blur-[100px] opacity-40"></div>
+        <div className="absolute bottom-[-20%] right-[-10%] w-96 h-96 bg-purple-600 rounded-full mix-blend-multiply filter blur-[100px] opacity-40"></div>
+        <div className="bg-slate-800/80 backdrop-blur-xl p-8 rounded-2xl shadow-2xl w-full max-w-md border border-slate-700 relative z-10">
+          <div className="w-16 h-16 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-blue-500/20">
+            <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-center mb-2 text-white">Portal Admin</h2>
+          <p className="text-slate-400 text-sm mb-6 text-center">
+            Akses terbatas. Masukkan password admin untuk mengelola member.
+          </p>
+          {adminAuthError && (
+            <div className="p-3 bg-red-500/20 text-red-300 rounded-lg text-sm mb-4 border border-red-500/30 text-center">
+              {adminAuthError}
             </div>
           )}
-          <div className="bg-white p-4 md:p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-900">Admin Pembersihan</h2>
-              {adminAuthed && (
-                <Button variant="ghost" onClick={handleAdminLogout}>
-                  Logout
-                </Button>
-              )}
-            </div>
-            <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 flex flex-col md:flex-row md:items-center gap-4">
-              <div className="flex-1">
-                <h3 className="font-semibold text-blue-900">Domain Aktif</h3>
-                <p className="text-sm text-blue-700">Pilih zona untuk pembersihan email routing.</p>
-              </div>
-              <select 
-                className="px-3 py-2 border border-blue-200 rounded-lg bg-white text-sm min-w-[200px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={credentials?.zoneId || ''}
-                onChange={(e) => {
-                  const zone = availableZones.find(z => z.id === e.target.value);
-                  if (zone && credentials) {
-                    saveCredentials({ ...credentials, zoneId: zone.id });
-                  }
-                }}
-              >
-                <option value="">Pilih Domain</option>
-                {availableZones.map(z => (
-                  <option key={z.id} value={z.id}>{z.name}</option>
-                ))}
-              </select>
-            </div>
-            {!adminAuthed ? (
-              <div className="space-y-3">
-                <Input
-                  label="Password Admin"
-                  type="password"
-                  value={adminPasswordInput}
-                  onChange={(e) => setAdminPasswordInput(e.target.value)}
-                />
-                {adminMode === 'setup' && (
-                  <Input
-                    label="Konfirmasi Password"
-                    type="password"
-                    value={adminPasswordConfirm}
-                    onChange={(e) => setAdminPasswordConfirm(e.target.value)}
-                  />
-                )}
-                {adminAuthError && (
-                  <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                    {adminAuthError}
-                  </div>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <Button onClick={adminMode === 'setup' ? handleAdminSetup : handleAdminLogin}>
-                    {adminMode === 'setup' ? 'Simpan Password' : 'Masuk'}
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              cleanupPanel
-            )}
+          <div className="space-y-4">
+            <Input
+              type="password"
+              placeholder="Password Admin"
+              value={adminPasswordInput}
+              onChange={(e) => setAdminPasswordInput(e.target.value)}
+              className="bg-slate-900/50 border-slate-600 text-white placeholder:text-slate-500"
+              onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                if (e.key === 'Enter') handleAdminLogin();
+              }}
+            />
+            <Button onClick={handleAdminLogin} disabled={!adminPasswordInput}
+              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white border-0">
+              Masuk Panel Admin
+            </Button>
           </div>
         </div>
-      </Layout>
+      </div>
     );
   }
 
@@ -1758,10 +1886,25 @@ const App: React.FC = () => {
       credentials={credentials} 
       onSaveCredentials={saveCredentials} 
       activeTab={activeTab} 
-      onTabChange={setActiveTab}
+      onTabChange={(tab) => {
+        if (isAdminRoute && tab !== 'members') return; // Block tab changes on admin route
+        setActiveTab(tab);
+      }}
       defaultCredentials={fetchedCredentials}
+      isVoucherVerified={isVoucherVerified}
+      voucherEmail={localStorage.getItem('voucherEmail') || ''}
+      onVoucherLogout={() => {
+        localStorage.removeItem('isVoucherVerified');
+        localStorage.removeItem('voucherEmail');
+        localStorage.removeItem('voucherExp');
+        localStorage.removeItem('memberCooldownHours');
+        localStorage.removeItem('memberCooldownEnabled');
+        setIsVoucherVerified(false);
+        setVoucherInput('');
+      }}
     >
       <div className="max-w-3xl mx-auto space-y-6">
+        {!isAdminRoute && (
         <div className="flex items-center justify-between px-4 py-4 bg-white rounded-xl border border-slate-200 shadow-sm">
           <button
             onClick={() => setActiveTab('subdomains')}
@@ -1787,6 +1930,7 @@ const App: React.FC = () => {
             <span className="text-xs font-medium mt-1">Mailbox</span>
           </button>
         </div>
+        )}
 
         {error && (
           <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-center justify-between">
@@ -1808,7 +1952,7 @@ const App: React.FC = () => {
                   </div>
                   <h3 className="text-xl font-bold text-slate-900">Akses Dibatasi Sementara</h3>
                   <p className="text-slate-500 max-w-md">
-                     Untuk mencegah penyalahgunaan, Anda harus menunggu <strong>8 jam</strong> setelah membuat subdomain sebelum dapat mengakses menu ini kembali.
+                     Untuk mencegah penyalahgunaan, Anda harus menunggu <strong>{memberCooldownDisplay} jam</strong> setelah membuat subdomain sebelum dapat mengakses menu ini kembali.
                   </p>
                   <div className="bg-orange-50 px-4 py-2 rounded-lg border border-orange-100 text-orange-700 font-mono font-bold text-lg">
                      {cooldownTime}
@@ -2217,6 +2361,143 @@ const App: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* MEMBERS TAB */}
+        {activeTab === 'members' && (
+          <div className="bg-white p-4 md:p-6 rounded-xl border border-slate-200 shadow-sm space-y-6">
+            <h2 className="text-xl font-bold text-slate-900">Manajemen Member Langganan</h2>
+            <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-500">Member yang terdaftar dapat menggunakan email mereka sebagai voucher untuk login.</p>
+            {isAdminRoute && (
+              <Button variant="ghost" size="sm" onClick={handleAdminLogout} className="text-red-500 hover:text-red-700">
+                Logout Admin
+              </Button>
+            )}
+            </div>
+
+            {/* Tambah Member Form */}
+            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-3">
+              <h3 className="font-semibold text-slate-800">Tambah Member Baru</h3>
+              <div className="flex flex-col md:flex-row gap-3">
+                <Input placeholder="Email (Voucher)" value={newEmail} onChange={e => setNewEmail(e.target.value)} className="flex-1" />
+                <Input placeholder="No WhatsApp" value={newWa} onChange={e => setNewWa(e.target.value)} className="flex-1" />
+              </div>
+              <div className="flex flex-col md:flex-row gap-3">
+                <select value={memberDurationMode} onChange={e => setMemberDurationMode(e.target.value as any)}
+                  className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm">
+                  <option value="monthly">Bulanan</option>
+                  <option value="custom">Hari (Custom)</option>
+                </select>
+                <Input type="number" min={1} placeholder={memberDurationMode === 'monthly' ? "Jumlah Bulan" : "Jumlah Hari"}
+                  value={memberDurationValue.toString()} onChange={e => setMemberDurationValue(parseInt(e.target.value) || 1)} className="flex-1" />
+                <Input type="number" min={1} max={72} placeholder="Cooldown Jam" value={newCooldownHours.toString()}
+                  onChange={e => setNewCooldownHours(parseInt(e.target.value) || 8)} className="w-32" />
+                <Button onClick={handleAddMember} disabled={memberActionLoading || !newEmail || !newWa || memberDurationValue < 1}>
+                  {memberActionLoading ? 'Menyimpan...' : 'Tambah'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Members Table */}
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <table className="min-w-full divide-y divide-slate-200">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Email (Voucher)</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">WhatsApp</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Cooldown</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-slate-200">
+                  {members.length === 0 ? (
+                    <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">Belum ada member terdaftar</td></tr>
+                  ) : members.map(member => (
+                    editingMemberId === member.id ? (
+                    <tr key={member.id} className="bg-blue-50/50">
+                      <td className="px-3 py-2"><Input placeholder="Email" value={editEmail} onChange={e => setEditEmail(e.target.value)} className="text-sm" /></td>
+                      <td className="px-3 py-2"><Input placeholder="WhatsApp" value={editWa} onChange={e => setEditWa(e.target.value)} className="text-sm" /></td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-1">
+                          <Input type="number" min={1} max={72} value={editCooldownHours.toString()} onChange={e => setEditCooldownHours(parseInt(e.target.value) || 1)} className="w-16 text-sm" />
+                          <span className="text-xs text-slate-500">jam</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-1">
+                          <select value={editDurationMode} onChange={e => setEditDurationMode(e.target.value as any)} className="px-2 py-1 border border-slate-300 rounded text-xs">
+                            <option value="monthly">Bulan</option><option value="custom">Hari</option>
+                          </select>
+                          <Input type="number" min={1} value={editDurationValue.toString()} onChange={e => setEditDurationValue(parseInt(e.target.value) || 1)} className="w-14 text-sm" />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button size="sm" onClick={() => handleSaveEdit(member)} disabled={memberActionLoading}>Simpan</Button>
+                          <Button size="sm" variant="ghost" onClick={handleCancelEdit}>Batal</Button>
+                        </div>
+                      </td>
+                    </tr>
+                    ) : (
+                    <tr key={member.id}>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-slate-900">{member.email}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-500">
+                        <a href={formatWaLink(member.wa)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-1">
+                          {member.wa}
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                        </a>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm">
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => handleToggleCooldown(member, !(member.cooldownEnabled ?? true))} disabled={memberActionLoading}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${(member.cooldownEnabled ?? true) ? 'bg-blue-600' : 'bg-slate-300'}`}>
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${(member.cooldownEnabled ?? true) ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                          </button>
+                          <span className={`text-xs font-medium ${(member.cooldownEnabled ?? true) ? 'text-blue-600' : 'text-slate-400'}`}>
+                            {member.cooldownHours ?? 8}j {(member.cooldownEnabled ?? true) ? 'ON' : 'OFF'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-500">
+                        {member.exp ? (member.exp > Date.now() ?
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Aktif s/d {new Date(member.exp).toLocaleDateString('id-ID')}</span> :
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">Kedaluwarsa</span>
+                        ) : <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800">Selamanya</span>}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
+                        <div className="flex items-center justify-end gap-2">
+                          <button onClick={() => handleStartEdit(member)} className="text-blue-600 hover:text-blue-900" disabled={memberActionLoading}>Edit</button>
+                          <button onClick={() => handleDeleteMember(member.id)} className="text-red-600 hover:text-red-900" disabled={memberActionLoading}>Hapus</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* CLEANUP TAB */}
+        {activeTab === 'cleanup' && (
+          <div className="bg-white p-4 md:p-6 rounded-xl border border-slate-200 shadow-sm space-y-6">
+            <h2 className="text-xl font-bold text-slate-900">Pembersihan Email Routing</h2>
+            <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 flex flex-col md:flex-row md:items-center gap-4">
+              <div className="flex-1">
+                <h3 className="font-semibold text-blue-900">Domain Aktif</h3>
+                <p className="text-sm text-blue-700">Pilih zona untuk pembersihan email routing.</p>
+              </div>
+              <select className="px-3 py-2 border border-blue-200 rounded-lg bg-white text-sm min-w-[200px]"
+                value={credentials?.zoneId || ''}
+                onChange={(e) => { if (credentials) saveCredentials({ ...credentials, zoneId: e.target.value }); }}>
+                <option value="">Pilih Domain</option>
+                {availableZones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+              </select>
+            </div>
+            {cleanupPanel}
           </div>
         )}
       </div>

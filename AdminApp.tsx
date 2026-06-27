@@ -13,6 +13,8 @@ type MemberRecord = {
   email: string;
   wa: string;
   exp?: number;
+  cooldownHours?: number;
+  cooldownEnabled?: boolean;
   createdAt?: string;
 };
 
@@ -27,7 +29,17 @@ const AdminApp: React.FC = () => {
   const [newWa, setNewWa] = useState('');
   const [durationMode, setDurationMode] = useState<'monthly' | 'custom'>('monthly');
   const [durationValue, setDurationValue] = useState<number>(1);
+  const [cooldownHours, setCooldownHours] = useState<number>(8);
   const [actionLoading, setActionLoading] = useState(false);
+
+  // State edit inline per member
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [editEmail, setEditEmail] = useState('');
+  const [editWa, setEditWa] = useState('');
+  const [editDurationMode, setEditDurationMode] = useState<'monthly' | 'custom'>('monthly');
+  const [editDurationValue, setEditDurationValue] = useState<number>(1);
+  const [editCooldownHours, setEditCooldownHours] = useState<number>(8);
+  const [editCooldownEnabled, setEditCooldownEnabled] = useState<boolean>(true);
 
   const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
@@ -130,17 +142,21 @@ const AdminApp: React.FC = () => {
       const parsedMembers: MemberRecord[] = records
         .filter((r: any) => r.type === 'TXT' && r.name === memberPrefix)
         .map((r: any) => {
-           // parse "email:xxx|wa:yyy|exp:zzz"
+           // parse "email:xxx|wa:yyy|exp:zzz|cooldown_h:8|cooldown_on:1"
            const content = r.content || '';
            const emailMatch = content.match(/email:([^|]+)/);
            const waMatch = content.match(/wa:([^|]+)/);
            const expMatch = content.match(/exp:(\d+)/);
+           const cooldownMatch = content.match(/cooldown_h:(\d+)/);
+           const cooldownOnMatch = content.match(/cooldown_on:(\d+)/);
            return {
                id: r.id,
                name: r.name,
                email: emailMatch ? emailMatch[1] : 'Unknown',
                wa: waMatch ? waMatch[1] : '',
                exp: expMatch ? parseInt(expMatch[1]) : undefined,
+               cooldownHours: cooldownMatch ? parseInt(cooldownMatch[1]) : undefined,
+               cooldownEnabled: cooldownOnMatch ? cooldownOnMatch[1] === '1' : true,
                createdAt: r.created_on
            };
         });
@@ -171,7 +187,7 @@ const AdminApp: React.FC = () => {
               ? Date.now() + (durationValue * 30 * 24 * 60 * 60 * 1000)
               : Date.now() + (durationValue * 24 * 60 * 60 * 1000);
 
-          const content = `email:${newEmail}|wa:${newWa}|exp:${expTimestamp}`;
+          const content = `email:${newEmail}|wa:${newWa}|exp:${expTimestamp}|cooldown_h:${cooldownHours}|cooldown_on:1`;
           await api.createZoneDnsRecord({
               type: 'TXT',
               name: `_member.${domainName}`,
@@ -201,6 +217,85 @@ const AdminApp: React.FC = () => {
       } finally {
           setActionLoading(false);
       }
+  };
+
+  const handleStartEdit = (member: MemberRecord) => {
+    setEditingMemberId(member.id);
+    setEditEmail(member.email);
+    setEditWa(member.wa);
+    setEditCooldownHours(member.cooldownHours ?? 8);
+    setEditCooldownEnabled(member.cooldownEnabled ?? true);
+    // Hitung durasi dari exp
+    if (member.exp) {
+      const remainingMs = member.exp - Date.now();
+      if (remainingMs > 0) {
+        const remainingDays = Math.ceil(remainingMs / (24 * 60 * 60 * 1000));
+        if (remainingDays % 30 === 0 && remainingDays >= 30) {
+          setEditDurationMode('monthly');
+          setEditDurationValue(remainingDays / 30);
+        } else {
+          setEditDurationMode('custom');
+          setEditDurationValue(remainingDays);
+        }
+      } else {
+        setEditDurationMode('custom');
+        setEditDurationValue(1);
+      }
+    } else {
+      setEditDurationMode('monthly');
+      setEditDurationValue(1);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMemberId(null);
+  };
+
+  const handleSaveEdit = async (member: MemberRecord) => {
+    if (!api || !settings) return;
+    setActionLoading(true);
+    try {
+      const expTimestamp = editDurationMode === 'monthly'
+        ? Date.now() + (editDurationValue * 30 * 24 * 60 * 60 * 1000)
+        : Date.now() + (editDurationValue * 24 * 60 * 60 * 1000);
+      const content = `email:${editEmail}|wa:${editWa}|exp:${expTimestamp}|cooldown_h:${editCooldownHours}|cooldown_on:${editCooldownEnabled ? '1' : '0'}`;
+      await api.updateZoneDnsRecord(member.id, {
+        type: 'TXT',
+        name: member.name,
+        content: content,
+        ttl: 1
+      });
+      setEditingMemberId(null);
+      await fetchData();
+    } catch (err: any) {
+      alert('Gagal menyimpan edit: ' + err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleToggleCooldown = async (member: MemberRecord, enabled: boolean) => {
+    if (!api || !settings) return;
+    setActionLoading(true);
+    try {
+      const newContent = member.name; // name is the record name like _member.domain.com
+      // Read current content and replace cooldown_on value
+      // We need the raw content from DNS, but we reconstructed it
+      const exp = member.exp ?? (Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const content = `email:${member.email}|wa:${member.wa}|exp:${exp}|cooldown_h:${member.cooldownHours ?? 8}|cooldown_on:${enabled ? '1' : '0'}`;
+      await api.updateZoneDnsRecord(member.id, {
+        type: 'TXT',
+        name: member.name,
+        content: content,
+        ttl: 1
+      });
+      // Update local state langsung
+      setMembers(prev => prev.map(m => m.id === member.id ? { ...m, cooldownEnabled: enabled } : m));
+    } catch (err: any) {
+      alert('Gagal toggle cooldown: ' + err.message);
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const formatWaLink = (wa: string) => {
@@ -351,6 +446,16 @@ const AdminApp: React.FC = () => {
                                 onChange={e => setDurationValue(parseInt(e.target.value) || 1)}
                                 className="flex-1"
                             />
+                            <Input 
+                                type="number"
+                                min={1}
+                                max={72}
+                                label="Cooldown (Jam)"
+                                placeholder="Default 8 jam" 
+                                value={cooldownHours.toString()} 
+                                onChange={e => setCooldownHours(parseInt(e.target.value) || 8)}
+                                className="w-32"
+                            />
                             <Button 
                                 onClick={handleAddMember} 
                                 disabled={actionLoading || !newEmail || !newWa || durationValue < 1}
@@ -367,6 +472,7 @@ const AdminApp: React.FC = () => {
                             <tr>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Email (Voucher)</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">WhatsApp</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Cooldown</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Status Expired</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Aksi</th>
                             </tr>
@@ -374,9 +480,73 @@ const AdminApp: React.FC = () => {
                         <tbody className="bg-white divide-y divide-slate-200">
                             {members.length === 0 ? (
                                 <tr>
-                                    <td colSpan={3} className="px-6 py-4 text-center text-sm text-slate-500">Belum ada member terdaftar</td>
+                                    <td colSpan={5} className="px-6 py-4 text-center text-sm text-slate-500">Belum ada member terdaftar</td>
                                 </tr>
                             ) : members.map((member) => (
+                                editingMemberId === member.id ? (
+                                /* === INLINE EDIT MODE === */
+                                <tr key={member.id} className="bg-blue-50/50">
+                                    <td className="px-4 py-3">
+                                        <Input 
+                                            placeholder="Email" 
+                                            value={editEmail} 
+                                            onChange={e => setEditEmail(e.target.value)}
+                                            className="text-sm"
+                                        />
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <Input 
+                                            placeholder="WhatsApp" 
+                                            value={editWa} 
+                                            onChange={e => setEditWa(e.target.value)}
+                                            className="text-sm"
+                                        />
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <div className="flex items-center gap-2">
+                                            <Input 
+                                                type="number"
+                                                min={1}
+                                                max={72}
+                                                value={editCooldownHours.toString()} 
+                                                onChange={e => setEditCooldownHours(parseInt(e.target.value) || 1)}
+                                                className="w-20 text-sm"
+                                            />
+                                            <span className="text-xs text-slate-500">jam</span>
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <div className="flex items-center gap-2">
+                                            <select 
+                                                value={editDurationMode} 
+                                                onChange={e => setEditDurationMode(e.target.value as any)}
+                                                className="px-2 py-1 border border-slate-300 rounded text-xs"
+                                            >
+                                                <option value="monthly">Bulan</option>
+                                                <option value="custom">Hari</option>
+                                            </select>
+                                            <Input 
+                                                type="number"
+                                                min={1}
+                                                value={editDurationValue.toString()} 
+                                                onChange={e => setEditDurationValue(parseInt(e.target.value) || 1)}
+                                                className="w-16 text-sm"
+                                            />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                        <div className="flex items-center justify-end gap-2">
+                                            <Button size="sm" onClick={() => handleSaveEdit(member)} disabled={actionLoading}>
+                                                Simpan
+                                            </Button>
+                                            <Button size="sm" variant="ghost" onClick={handleCancelEdit} disabled={actionLoading}>
+                                                Batal
+                                            </Button>
+                                        </div>
+                                    </td>
+                                </tr>
+                                ) : (
+                                /* === VIEW MODE === */
                                 <tr key={member.id}>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">{member.email}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
@@ -391,6 +561,24 @@ const AdminApp: React.FC = () => {
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                                             </svg>
                                         </a>
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                onClick={() => handleToggleCooldown(member, !(member.cooldownEnabled ?? true))}
+                                                disabled={actionLoading}
+                                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+                                                    (member.cooldownEnabled ?? true) ? 'bg-blue-600' : 'bg-slate-300'
+                                                }`}
+                                            >
+                                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                                    (member.cooldownEnabled ?? true) ? 'translate-x-4' : 'translate-x-0.5'
+                                                }`} />
+                                            </button>
+                                            <span className={`text-xs font-medium ${(member.cooldownEnabled ?? true) ? 'text-blue-600' : 'text-slate-400'}`}>
+                                                {member.cooldownHours ?? 8}j {(member.cooldownEnabled ?? true) ? 'ON' : 'OFF'}
+                                            </span>
+                                        </div>
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
                                         {member.exp ? (
@@ -410,16 +598,25 @@ const AdminApp: React.FC = () => {
                                         )}
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                        <button 
-                                            onClick={() => handleDeleteMember(member.id)}
-                                            className="text-red-600 hover:text-red-900"
-                                            disabled={actionLoading}
-                                        >
-                                            Hapus
-                                        </button>
+                                        <div className="flex items-center justify-end gap-2">
+                                            <button 
+                                                onClick={() => handleStartEdit(member)}
+                                                className="text-blue-600 hover:text-blue-900"
+                                                disabled={actionLoading}
+                                            >
+                                                Edit
+                                            </button>
+                                            <button 
+                                                onClick={() => handleDeleteMember(member.id)}
+                                                className="text-red-600 hover:text-red-900"
+                                                disabled={actionLoading}
+                                            >
+                                                Hapus
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
-                            ))}
+                            )))}
                         </tbody>
                     </table>
                 </div>

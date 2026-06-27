@@ -106,6 +106,13 @@ export class CloudflareService {
     });
   }
 
+  async updateZoneDnsRecord(id: string, record: { type?: string; name?: string; content?: string; ttl?: number; priority?: number }) {
+    return this.request<any>(`/zones/${this.creds.zoneId}/dns_records/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(record),
+    });
+  }
+
   async deleteZoneDnsRecord(id: string) {
     return this.request<any>(`/zones/${this.creds.zoneId}/dns_records/${id}`, {
       method: 'DELETE',

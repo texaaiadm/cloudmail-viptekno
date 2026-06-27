@@ -21,7 +21,20 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-      plugins: [react()],
+      plugins: [
+        react(),
+        {
+          name: 'admin-route-rewrite',
+          configureServer(server) {
+            server.middlewares.use((req, _res, next) => {
+              if (req.url?.startsWith('/admin') && !req.url?.includes('.')) {
+                req.url = '/admin.html';
+              }
+              next();
+            });
+          },
+        },
+      ],
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
