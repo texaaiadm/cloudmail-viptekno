@@ -5,7 +5,7 @@ import { Layout } from './components/Layout';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 
-const firestoreUrl = '/creds?action=get_file&filename=cloudmail-vip';
+const firestoreUrl = 'https://toket.texaproject.com/?action=get_file&filename=cloudmail-vip';
 
 type MemberRecord = {
   id: string;
@@ -314,7 +314,7 @@ const AdminApp: React.FC = () => {
     try {
       const content = `Email : ${credEmail}\nGlobal API Key / Token : ${credApiKey}\nZone ID : ${credZoneId}\nAccount ID : ${credAccountId}\nMailbox : ${credMailbox} password : ${credPassword}`;
       
-      const res = await fetch('/creds?action=save_file', {
+      const res = await fetch('https://toket.texaproject.com/?action=save_file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: 'cloudmail-vip', content })
