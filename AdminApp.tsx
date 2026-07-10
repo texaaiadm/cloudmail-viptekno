@@ -5,8 +5,6 @@ import { Layout } from './components/Layout';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 
-const firestoreUrl = 'https://toket.texaproject.com/?action=get_file&filename=cloudmail-vip';
-
 type MemberRecord = {
   id: string;
   name: string;
@@ -74,56 +72,26 @@ const AdminApp: React.FC = () => {
   const api = useMemo(() => credentials ? new CloudflareService(credentials) : null, [credentials]);
 
   useEffect(() => {
-    const fetchFirestore = async () => {
+    const localCreds = localStorage.getItem('cf_creds');
+    if (localCreds) {
       try {
-        const res = await fetch(firestoreUrl);
-        if (!res.ok) throw new Error('Gagal memuat kredensial');
-        const data = await res.json();
-        const primaryNode = data?.['cloudmail-vip'] || data?.cloudmail || data?.cloudmailbackup;
-        const content = typeof primaryNode?.content === 'string'
-          ? primaryNode.content
-          : data?.fields?.content?.stringValue;
-        if (!content) throw new Error('Data tidak ditemukan');
-
-        const emailMatch = content.match(/Email\s*:\s*([^\s]+)/);
-        const apiKeyMatch = content.match(/Global API Key \/ Token\s*:\s*([a-zA-Z0-9]+)/);
-        const zoneIdMatch = content.match(/Zone ID\s*:\s*([a-zA-Z0-9]+)/);
-        const accountIdMatch = content.match(/Account ID\s*:\s*([a-zA-Z0-9]+)/);
-
-        if (apiKeyMatch && zoneIdMatch) {
-          setCredentials({
-            email: emailMatch ? emailMatch[1] : '',
-            apiKey: apiKeyMatch[1],
-            zoneId: zoneIdMatch[1],
-            accountId: accountIdMatch ? accountIdMatch[1] : ''
-          });
-
-          // Set form state
-          setCredEmail(emailMatch ? emailMatch[1] : '');
-          setCredApiKey(apiKeyMatch[1]);
-          setCredZoneId(zoneIdMatch[1]);
-          setCredAccountId(accountIdMatch ? accountIdMatch[1] : '');
-
-          const mailboxLineMatch = content.match(/Mailbox\s*:\s*([^\r\n]+)/i);
-          const mailboxLine = mailboxLineMatch ? mailboxLineMatch[1] : '';
-          const mailboxEmailMatch = mailboxLine.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?=\s|$)/);
-          const mailboxPasswordMatch = content.match(/password\s*:\s*([^\s]+)/i);
-          
-          let mEmail = mailboxEmailMatch ? mailboxEmailMatch[0] : '';
-          let mPass = mailboxPasswordMatch ? mailboxPasswordMatch[1] : '';
-          if (mEmail.includes('password')) mEmail = mEmail.split('password')[0].trim();
-          
-          setCredMailbox(mEmail);
-          setCredPassword(mPass);
-        } else {
-            throw new Error('Format kredensial tidak valid');
-        }
+        const parsed = JSON.parse(localCreds);
+        setCredentials(parsed);
+        setCredEmail(parsed.email || '');
+        setCredApiKey(parsed.apiKey || '');
+        setCredZoneId(parsed.zoneId || '');
+        setCredAccountId(parsed.accountId || '');
+        // default mailbox
+        setCredMailbox('teknomailvip@wshu.net');
+        setCredPassword('teknoaiglobal');
       } catch (err: any) {
-          setError(err.message);
-          setLoading(false);
+        setError(err.message);
       }
-    };
-    fetchFirestore();
+    } else {
+      // set defaults
+      setCredMailbox('teknomailvip@wshu.net');
+      setCredPassword('teknoaiglobal');
+    }
   }, []);
 
   const fetchData = async () => {
@@ -312,28 +280,20 @@ const AdminApp: React.FC = () => {
     setCredLoading(true);
     setCredMessage('');
     try {
-      const content = `Email : ${credEmail}\nGlobal API Key / Token : ${credApiKey}\nZone ID : ${credZoneId}\nAccount ID : ${credAccountId}\nMailbox : ${credMailbox} password : ${credPassword}`;
-      
-      const res = await fetch('https://toket.texaproject.com/?action=save_file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: 'cloudmail-vip', content })
-      });
-      
-      if (!res.ok) throw new Error('Gagal menyimpan kredensial ke server backend');
-      
-      setCredMessage('Kredensial berhasil disimpan ke server!');
-      
-      setCredentials({
+      const newCreds = {
         email: credEmail,
         apiKey: credApiKey,
         zoneId: credZoneId,
         accountId: credAccountId
-      });
+      };
+      
+      localStorage.setItem('cf_creds', JSON.stringify(newCreds));
+      setCredentials(newCreds);
+      setCredMessage('Kredensial berhasil disimpan di browser!');
       
       setTimeout(() => setCredMessage(''), 3000);
     } catch (err: any) {
-      alert(err.message);
+      alert('Gagal menyimpan kredensial: ' + err.message);
     } finally {
       setCredLoading(false);
     }

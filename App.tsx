@@ -11,7 +11,6 @@ const catchAllForwardLockKey = 'catchall_forward_lock';
 const catchAllForwardValueKey = 'catchall_forward_value';
 const generatedEmailKey = 'generated_email_entries';
 const mailboxApiBase = 'https://api.mail.tm';
-const firestoreUrl = 'https://toket.texaproject.com/?action=get_file&filename=cloudmail-vip';
 const cleanupBackupKey = 'cleanup_backup_v1';
 const cleanupAuditKey = 'cleanup_audit_v1';
 const cleanupMonitoringKey = 'cleanup_monitoring_url_v1';
@@ -466,73 +465,18 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const fetchFirestore = async () => {
+    // Membaca mailbox auto-login dari local storage atau fallback ke default
+    setMailboxAutoLoginEmail('teknomailvip@wshu.net');
+    setMailboxAutoLoginPassword('teknoaiglobal');
+
+    const localCreds = localStorage.getItem('cf_creds');
+    if (localCreds) {
       try {
-        const res = await fetch(firestoreUrl);
-        if (!res.ok) return;
-        const data = await res.json();
-        const primaryNode = data?.['cloudmail-vip'] || data?.cloudmail || data?.cloudmailbackup;
-        const content = typeof primaryNode?.content === 'string'
-          ? primaryNode.content
-          : data?.fields?.content?.stringValue;
-        if (!content) return;
-
-        const emailMatch = content.match(/Email\s*:\s*([^\s]+)/);
-        const apiKeyMatch = content.match(/Global API Key \/ Token\s*:\s*([a-zA-Z0-9]+)/);
-        const zoneIdMatch = content.match(/Zone ID\s*:\s*([a-zA-Z0-9]+)/);
-        const accountIdMatch = content.match(/Account ID\s*:\s*([a-zA-Z0-9]+)/);
-
-        const mailboxLineMatch = content.match(/Mailbox\s*:\s*([^\r\n]+)/i);
-        const mailboxLine = mailboxLineMatch ? mailboxLineMatch[1] : '';
-        const mailboxEmailMatch = mailboxLine.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?=\s|$)/);
-        const mailboxPasswordMatch = content.match(/password\s*:\s*([^\s]+)/i);
-
-        let mailboxEmail = mailboxEmailMatch ? mailboxEmailMatch[0] : '';
-        let mailboxPassword = mailboxPasswordMatch ? mailboxPasswordMatch[1] : '';
-
-        if (mailboxEmail.includes('password')) {
-          mailboxEmail = mailboxEmail.split('password')[0];
-        }
-
-        if (!mailboxEmail && content.includes('tekno@dollicons.compassword')) {
-          mailboxEmail = 'tekno@dollicons.com';
-          mailboxPassword = 'teknoaiglobal';
-        }
-
-        if (!mailboxEmail) {
-          const fallbackEmailMatch = content.match(/tekno@dollicons\.com/i);
-          mailboxEmail = fallbackEmailMatch ? 'tekno@dollicons.com' : '';
-        }
-
-        if (!mailboxPassword) {
-          const fallbackPasswordMatch = content.match(/teknoaiglobal/i);
-          mailboxPassword = fallbackPasswordMatch ? 'teknoaiglobal' : '';
-        }
-
-        if (mailboxEmail && mailboxPassword) {
-          setMailboxAutoLoginEmail(mailboxEmail);
-          setMailboxAutoLoginPassword(mailboxPassword);
-        } else {
-          setMailboxAutoLoginEmail('tekno@dollicons.com');
-          setMailboxAutoLoginPassword('teknoaiglobal');
-        }
-
-        if (apiKeyMatch && zoneIdMatch) {
-          const newCreds = {
-            email: emailMatch ? emailMatch[1] : '',
-            apiKey: apiKeyMatch[1],
-            zoneId: zoneIdMatch[1],
-            accountId: accountIdMatch ? accountIdMatch[1] : ''
-          };
-          setFetchedCredentials(newCreds);
-          setCredentials(newCreds);
-          try {
-            localStorage.setItem('cf_creds', JSON.stringify(newCreds));
-          } catch {}
-        }
-      } catch { }
-    };
-    fetchFirestore();
+        const parsed = JSON.parse(localCreds);
+        setCredentials(parsed);
+        setFetchedCredentials(parsed);
+      } catch {}
+    }
   }, []);
 
   const api = useMemo(() => credentials ? new CloudflareService(credentials) : null, [credentials]);
