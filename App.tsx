@@ -476,6 +476,23 @@ const App: React.FC = () => {
         setCredentials(parsed);
         setFetchedCredentials(parsed);
       } catch {}
+    } else {
+      // Fallback ke default environment variables atau hardcoded fallback (untuk setup awal & member)
+      const envEmail = import.meta.env.VITE_CF_EMAIL || 'cloudflare@email.teknoaiglobal.com';
+      const envApiKey = import.meta.env.VITE_CF_API_KEY || 'bdf5ebe35a625271b4a1507c87aa3dfc3353c';
+      const envZoneId = import.meta.env.VITE_CF_ZONE_ID || '5ad57fb06e03cc145dee0d6efe068ce0';
+      const envAccountId = import.meta.env.VITE_CF_ACCOUNT_ID || '64775c16472d1c2fa00c0b8abce4d24e';
+
+      if (envEmail && envApiKey && envZoneId) {
+        const defaultCreds = {
+          email: envEmail,
+          apiKey: envApiKey,
+          zoneId: envZoneId,
+          accountId: envAccountId || ''
+        };
+        setCredentials(defaultCreds);
+        setFetchedCredentials(defaultCreds);
+      }
     }
   }, []);
 
