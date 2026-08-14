@@ -82,7 +82,7 @@ const AdminApp: React.FC = () => {
         setCredZoneId(parsed.zoneId || '');
         setCredAccountId(parsed.accountId || '');
         // default mailbox
-        setCredMailbox('teknomailvip@wshu.net');
+        setCredMailbox('tekno@emalupe.com');
         setCredPassword('teknoaiglobal');
       } catch (err: any) {
         setError(err.message);
@@ -109,7 +109,7 @@ const AdminApp: React.FC = () => {
       }
 
       // set defaults
-      setCredMailbox('teknomailvip@wshu.net');
+      setCredMailbox('tekno@emalupe.com');
       setCredPassword('teknoaiglobal');
     }
   }, []);
