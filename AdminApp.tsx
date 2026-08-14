@@ -16,6 +16,32 @@ type MemberRecord = {
   createdAt?: string;
 };
 
+const parseCredsFromContent = (content: string) => {
+  const emailMatch = content.match(/Email\s*:\s*([^\s\r\n]+)/i);
+  const apiKeyMatch = content.match(/(?:Global API Key \/ Token|API Key|ApiKey)\s*:\s*([^\s\r\n]+)/i);
+  const zoneIdMatch = content.match(/Zone ID\s*:\s*([^\s\r\n]+)/i);
+  const accountIdMatch = content.match(/Account ID\s*:\s*([^\s\r\n]+)/i);
+  const mailboxMatch = content.match(/Mailbox\s*:\s*([^\s\r\n]+)/i);
+
+  let password = '';
+  const pwMatch1 = content.match(/Mailbox Password\s*:\s*([^\s\r\n]+)/i);
+  const pwMatch2 = content.match(/password\s*:\s*([^\s\r\n]+)/i);
+  if (pwMatch1) {
+    password = pwMatch1[1];
+  } else if (pwMatch2) {
+    password = pwMatch2[1];
+  }
+
+  return {
+    email: emailMatch ? emailMatch[1] : '',
+    apiKey: apiKeyMatch ? apiKeyMatch[1] : '',
+    zoneId: zoneIdMatch ? zoneIdMatch[1] : '',
+    accountId: accountIdMatch ? accountIdMatch[1] : '',
+    mailbox: mailboxMatch ? mailboxMatch[1] : '',
+    mailboxPassword: password
+  };
+};
+
 const AdminApp: React.FC = () => {
   const [credentials, setCredentials] = useState<CloudflareCredentials | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -72,46 +98,76 @@ const AdminApp: React.FC = () => {
   const api = useMemo(() => credentials ? new CloudflareService(credentials) : null, [credentials]);
 
   useEffect(() => {
-    const localCreds = localStorage.getItem('cf_creds');
-    if (localCreds) {
-      try {
-        const parsed = JSON.parse(localCreds);
-        setCredentials(parsed);
-        setCredEmail(parsed.email || '');
-        setCredApiKey(parsed.apiKey || '');
-        setCredZoneId(parsed.zoneId || '');
-        setCredAccountId(parsed.accountId || '');
-        // default mailbox
+    const loadCreds = async () => {
+      // 1. Try to load from localStorage first
+      const localCreds = localStorage.getItem('cf_creds');
+      if (localCreds) {
+        try {
+          const parsed = JSON.parse(localCreds);
+          setCredentials(parsed);
+          setCredEmail(parsed.email || '');
+          setCredApiKey(parsed.apiKey || '');
+          setCredZoneId(parsed.zoneId || '');
+          setCredAccountId(parsed.accountId || '');
+          setCredMailbox(parsed.mailbox || 'tekno@emalupe.com');
+          setCredPassword(parsed.mailboxPassword || 'teknoaiglobal');
+        } catch (err: any) {
+          setError(err.message);
+        }
+      } else {
+        // Fallback ke default environment variables atau hardcoded fallback (untuk setup awal)
+        const envEmail = import.meta.env.VITE_CF_EMAIL || 'cloudflare@email.teknoaiglobal.com';
+        const envApiKey = import.meta.env.VITE_CF_API_KEY || 'bdf5ebe35a625271b4a1507c87aa3dfc3353c';
+        const envZoneId = import.meta.env.VITE_CF_ZONE_ID || '5ad57fb06e03cc145dee0d6efe068ce0';
+        const envAccountId = import.meta.env.VITE_CF_ACCOUNT_ID || '64775c16472d1c2fa00c0b8abce4d24e';
+
+        if (envEmail && envApiKey && envZoneId) {
+          const defaultCreds = {
+            email: envEmail,
+            apiKey: envApiKey,
+            zoneId: envZoneId,
+            accountId: envAccountId
+          };
+          setCredentials(defaultCreds);
+          setCredEmail(envEmail);
+          setCredApiKey(envApiKey);
+          setCredZoneId(envZoneId);
+          setCredAccountId(envAccountId);
+        }
+
+        // set defaults
         setCredMailbox('tekno@emalupe.com');
         setCredPassword('teknoaiglobal');
+      }
+
+      // 2. Fetch from Database server asynchronously
+      try {
+        const res = await fetch('/creds?action=get_file&filename=cloudmail');
+        if (res.ok) {
+          const data = await res.json();
+          const fileData = data.cloudmail;
+          if (fileData && typeof fileData.content === 'string') {
+            const parsed = parseCredsFromContent(fileData.content);
+            if (parsed.apiKey && parsed.zoneId) {
+              setCredentials(parsed);
+              setCredEmail(parsed.email || '');
+              setCredApiKey(parsed.apiKey || '');
+              setCredZoneId(parsed.zoneId || '');
+              setCredAccountId(parsed.accountId || '');
+              setCredMailbox(parsed.mailbox || 'tekno@emalupe.com');
+              setCredPassword(parsed.mailboxPassword || 'teknoaiglobal');
+              localStorage.setItem('cf_creds', JSON.stringify(parsed));
+            }
+          }
+        }
       } catch (err: any) {
-        setError(err.message);
+        console.error('Failed to load credentials from database:', err);
+      } finally {
+        setLoading(false);
       }
-    } else {
-      // Fallback ke default environment variables atau hardcoded fallback (untuk setup awal)
-      const envEmail = import.meta.env.VITE_CF_EMAIL || 'cloudflare@email.teknoaiglobal.com';
-      const envApiKey = import.meta.env.VITE_CF_API_KEY || 'bdf5ebe35a625271b4a1507c87aa3dfc3353c';
-      const envZoneId = import.meta.env.VITE_CF_ZONE_ID || '5ad57fb06e03cc145dee0d6efe068ce0';
-      const envAccountId = import.meta.env.VITE_CF_ACCOUNT_ID || '64775c16472d1c2fa00c0b8abce4d24e';
+    };
 
-      if (envEmail && envApiKey && envZoneId) {
-        const defaultCreds = {
-          email: envEmail,
-          apiKey: envApiKey,
-          zoneId: envZoneId,
-          accountId: envAccountId
-        };
-        setCredentials(defaultCreds);
-        setCredEmail(envEmail);
-        setCredApiKey(envApiKey);
-        setCredZoneId(envZoneId);
-        setCredAccountId(envAccountId);
-      }
-
-      // set defaults
-      setCredMailbox('tekno@emalupe.com');
-      setCredPassword('teknoaiglobal');
-    }
+    loadCreds();
   }, []);
 
   const fetchData = async () => {
@@ -304,13 +360,36 @@ const AdminApp: React.FC = () => {
         email: credEmail,
         apiKey: credApiKey,
         zoneId: credZoneId,
-        accountId: credAccountId
+        accountId: credAccountId,
+        mailbox: credMailbox,
+        mailboxPassword: credPassword
       };
-      
+
+      // 1. Simpan ke local storage
       localStorage.setItem('cf_creds', JSON.stringify(newCreds));
       setCredentials(newCreds);
-      setCredMessage('Kredensial berhasil disimpan di browser!');
-      
+
+      // 2. Simpan ke database server
+      const contentString = `Email : ${credEmail}
+Global API Key / Token : ${credApiKey}
+Zone ID : ${credZoneId}
+Account ID : ${credAccountId}
+Mailbox : ${credMailbox} password : ${credPassword}`;
+
+      const res = await fetch('/creds?action=save_file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: 'cloudmail',
+          content: contentString
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error('Gagal menyimpan ke database server');
+      }
+
+      setCredMessage('Kredensial berhasil disimpan di database server & browser!');
       setTimeout(() => setCredMessage(''), 3000);
     } catch (err: any) {
       alert('Gagal menyimpan kredensial: ' + err.message);

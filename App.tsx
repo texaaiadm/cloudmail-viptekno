@@ -10,7 +10,7 @@ const emailForwardValueKey = 'email_forward_value';
 const catchAllForwardLockKey = 'catchall_forward_lock';
 const catchAllForwardValueKey = 'catchall_forward_value';
 const generatedEmailKey = 'generated_email_entries';
-const mailboxApiBase = 'https://api.mail.tm';
+const mailboxApiBase = 'https://api.mail.gw';
 const cleanupBackupKey = 'cleanup_backup_v1';
 const cleanupAuditKey = 'cleanup_audit_v1';
 const cleanupMonitoringKey = 'cleanup_monitoring_url_v1';
@@ -87,6 +87,32 @@ type MemberRecord = {
   cooldownHours?: number;
   cooldownEnabled?: boolean;
   createdAt?: string;
+};
+
+const parseCredsFromContent = (content: string) => {
+  const emailMatch = content.match(/Email\s*:\s*([^\s\r\n]+)/i);
+  const apiKeyMatch = content.match(/(?:Global API Key \/ Token|API Key|ApiKey)\s*:\s*([^\s\r\n]+)/i);
+  const zoneIdMatch = content.match(/Zone ID\s*:\s*([^\s\r\n]+)/i);
+  const accountIdMatch = content.match(/Account ID\s*:\s*([^\s\r\n]+)/i);
+  const mailboxMatch = content.match(/Mailbox\s*:\s*([^\s\r\n]+)/i);
+
+  let password = '';
+  const pwMatch1 = content.match(/Mailbox Password\s*:\s*([^\s\r\n]+)/i);
+  const pwMatch2 = content.match(/password\s*:\s*([^\s\r\n]+)/i);
+  if (pwMatch1) {
+    password = pwMatch1[1];
+  } else if (pwMatch2) {
+    password = pwMatch2[1];
+  }
+
+  return {
+    email: emailMatch ? emailMatch[1] : '',
+    apiKey: apiKeyMatch ? apiKeyMatch[1] : '',
+    zoneId: zoneIdMatch ? zoneIdMatch[1] : '',
+    accountId: accountIdMatch ? accountIdMatch[1] : '',
+    mailbox: mailboxMatch ? mailboxMatch[1] : '',
+    mailboxPassword: password
+  };
 };
 
 const App: React.FC = () => {
@@ -396,11 +422,11 @@ const App: React.FC = () => {
   const [mailboxLoginEmail, setMailboxLoginEmail] = useState('');
   const [mailboxLoginPassword, setMailboxLoginPassword] = useState('');
   const [mailboxRegisterUser, setMailboxRegisterUser] = useState('');
-  const [mailboxRegisterDomain, setMailboxRegisterDomain] = useState('mail.tm');
+  const [mailboxRegisterDomain, setMailboxRegisterDomain] = useState('mail.gw');
   const [mailboxRegisterPassword, setMailboxRegisterPassword] = useState('');
   const [mailboxAutoRefresh, setMailboxAutoRefresh] = useState(true);
   const [mailboxDomains, setMailboxDomains] = useState<string[]>([
-    'mail.tm', 'inbox.testmail.app', 'inbox.teknoaiglobal.online', 'inbox.texamail.online'
+    'mail.gw', 'mail.tm', 'inbox.testmail.app', 'inbox.teknoaiglobal.online', 'inbox.texamail.online'
   ]);
   const [mailboxAccount, setMailboxAccount] = useState<MailboxAccount | null>(null);
   const [mailboxToken, setMailboxToken] = useState<string | null>(null);
@@ -465,35 +491,56 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    // Membaca mailbox auto-login dari local storage atau fallback ke default
-    setMailboxAutoLoginEmail('teknomailvip@wshu.net');
-    setMailboxAutoLoginPassword('teknoaiglobal');
+    const loadCreds = async () => {
+      // Membaca mailbox auto-login dari local storage atau fallback ke default
+      let defaultMailboxEmail = 'teknomailvip@wshu.net';
+      let defaultMailboxPassword = 'teknoaiglobal';
 
-    const localCreds = localStorage.getItem('cf_creds');
-    if (localCreds) {
-      try {
-        const parsed = JSON.parse(localCreds);
-        setCredentials(parsed);
-        setFetchedCredentials(parsed);
-      } catch {}
-    } else {
-      // Fallback ke default environment variables atau hardcoded fallback (untuk setup awal & member)
-      const envEmail = import.meta.env.VITE_CF_EMAIL || 'cloudflare@email.teknoaiglobal.com';
-      const envApiKey = import.meta.env.VITE_CF_API_KEY || 'bdf5ebe35a625271b4a1507c87aa3dfc3353c';
-      const envZoneId = import.meta.env.VITE_CF_ZONE_ID || '5ad57fb06e03cc145dee0d6efe068ce0';
-      const envAccountId = import.meta.env.VITE_CF_ACCOUNT_ID || '64775c16472d1c2fa00c0b8abce4d24e';
-
-      if (envEmail && envApiKey && envZoneId) {
-        const defaultCreds = {
-          email: envEmail,
-          apiKey: envApiKey,
-          zoneId: envZoneId,
-          accountId: envAccountId || ''
-        };
-        setCredentials(defaultCreds);
-        setFetchedCredentials(defaultCreds);
+      const localCreds = localStorage.getItem('cf_creds');
+      if (localCreds) {
+        try {
+          const parsed = JSON.parse(localCreds);
+          setCredentials(parsed);
+          setFetchedCredentials(parsed);
+          if (parsed.mailbox) {
+            defaultMailboxEmail = parsed.mailbox;
+          }
+          if (parsed.mailboxPassword) {
+            defaultMailboxPassword = parsed.mailboxPassword;
+          }
+        } catch {}
       }
-    }
+
+      setMailboxAutoLoginEmail(defaultMailboxEmail);
+      setMailboxAutoLoginPassword(defaultMailboxPassword);
+
+      // Fetch from Database server asynchronously to update
+      try {
+        const res = await fetch('/creds?action=get_file&filename=cloudmail');
+        if (res.ok) {
+          const data = await res.json();
+          const fileData = data.cloudmail;
+          if (fileData && typeof fileData.content === 'string') {
+            const parsed = parseCredsFromContent(fileData.content);
+            if (parsed.apiKey && parsed.zoneId) {
+              setCredentials(parsed);
+              setFetchedCredentials(parsed);
+              localStorage.setItem('cf_creds', JSON.stringify(parsed));
+              if (parsed.mailbox) {
+                setMailboxAutoLoginEmail(parsed.mailbox);
+              }
+              if (parsed.mailboxPassword) {
+                setMailboxAutoLoginPassword(parsed.mailboxPassword);
+              }
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error('Failed to load credentials from database:', err);
+      }
+    };
+
+    loadCreds();
   }, []);
 
   const api = useMemo(() => credentials ? new CloudflareService(credentials) : null, [credentials]);
@@ -2221,14 +2268,40 @@ const App: React.FC = () => {
 
             {!mailboxToken ? (
               <div className="flex flex-col items-center justify-center py-12 space-y-4">
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
-                <div className="text-center space-y-2">
-                  <p className="text-slate-600">Sedang login ke mailbox...</p>
-                  {mailboxAutoLoginEmail && (
-                    <p className="text-sm text-slate-500">Email: <span className="font-mono">{mailboxAutoLoginEmail}</span></p>
-                  )}
-                </div>
-                <p className="text-slate-500">Memuat Inbox...</p>
+                {mailboxError ? (
+                  <div className="text-center space-y-4 max-w-md p-6 bg-red-50 border border-red-200 rounded-xl">
+                    <svg className="w-12 h-12 text-red-500 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <div className="space-y-1">
+                      <h3 className="text-md font-bold text-red-800">Gagal terhubung ke Mailbox</h3>
+                      <p className="text-sm text-red-600 font-mono break-all">{mailboxError}</p>
+                    </div>
+                    {mailboxAutoLoginEmail && (
+                      <p className="text-xs text-slate-500">Email: <span className="font-mono">{mailboxAutoLoginEmail}</span></p>
+                    )}
+                    <Button
+                      onClick={() => {
+                        setMailboxError(null);
+                        handleMailboxExecuteLogin(mailboxAutoLoginEmail, mailboxAutoLoginPassword);
+                      }}
+                      className="bg-red-600 hover:bg-red-700 text-white w-full border-0"
+                    >
+                      Coba Login Lagi
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
+                    <div className="text-center space-y-2">
+                      <p className="text-slate-600">Sedang login ke mailbox...</p>
+                      {mailboxAutoLoginEmail && (
+                        <p className="text-sm text-slate-500">Email: <span className="font-mono">{mailboxAutoLoginEmail}</span></p>
+                      )}
+                    </div>
+                    <p className="text-slate-500">Memuat Inbox...</p>
+                  </>
+                )}
               </div>
             ) : (
               <div className="flex flex-col h-[60vh] md:h-[calc(100vh-16rem)] min-h-[400px]">

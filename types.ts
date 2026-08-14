@@ -4,6 +4,8 @@ export interface CloudflareCredentials {
   apiKey: string;
   zoneId: string;
   accountId: string;
+  mailbox?: string;
+  mailboxPassword?: string;
 }
 
 export interface Settings {
