@@ -1,0 +1,36 @@
+name = "cloudmail-inbox"
+main = "src/worker.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# --- D1: penyimpan pesan (metadata + text/html) ---
+# Buat dulu:  wrangler d1 create cloudmail_inbox
+# Lalu tempel database_id hasilnya di bawah.
+[[d1_databases]]
+binding = "DB"
+database_name = "cloudmail_inbox"
+database_id = "896c8a2c-a3bb-4c9a-9e2d-c74dd6878bb8"
+
+# --- Custom domain: URL publik di zona sendiri (auto DNS + TLS) ---
+[[routes]]
+pattern = "inbox.teknoaiglobal.me"
+custom_domain = true
+
+# --- R2: penyimpan lampiran (OPSIONAL) ---
+# Aktifkan R2 di Dashboard dulu, buat bucket, lalu un-comment blok ini &
+# redeploy. Tanpa R2, lampiran dilewati (isi text/html + OTP tetap tersimpan).
+#   wrangler r2 bucket create cloudmail-attachments
+# [[r2_buckets]]
+# binding = "ATTACH"
+# bucket_name = "cloudmail-attachments"
+
+# --- Cron: purge pesan lama biar D1 tidak membengkak ---
+[triggers]
+crons = ["0 * * * *"]
+
+[vars]
+RETENTION_HOURS = "72"
+
+# Secrets (JANGAN taruh di sini — pakai wrangler secret put):
+#   wrangler secret put API_TOKEN         # token bearer utk frontend
+#   wrangler secret put MAILBOX_PASSWORD   # password login mailbox di app

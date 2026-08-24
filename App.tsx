@@ -10,7 +10,22 @@ const emailForwardValueKey = 'email_forward_value';
 const catchAllForwardLockKey = 'catchall_forward_lock';
 const catchAllForwardValueKey = 'catchall_forward_value';
 const generatedEmailKey = 'generated_email_entries';
-const mailboxApiBase = 'https://api.mail.gw';
+// Inbox backend. Default: inbox pribadi self-hosted di Cloudflare Email Worker
+// (https://inbox.teknoaiglobal.me) — tanpa ketergantungan mail.tm/mail.gw.
+// Override per-device via localStorage 'inbox_api_base'. Set ke 'mailgw' untuk
+// paksa fallback lama.
+const inboxApiBaseKey = 'inbox_api_base';
+const defaultInboxBase = 'https://inbox.teknoaiglobal.me';
+const mailboxApiBase = (() => {
+  try {
+    const v = localStorage.getItem(inboxApiBaseKey);
+    if (v && v.trim()) {
+      if (v.trim() === 'mailgw') return 'https://api.mail.gw';
+      return v.trim().replace(/\/+$/, '');
+    }
+  } catch {}
+  return defaultInboxBase;
+})();
 const cleanupBackupKey = 'cleanup_backup_v1';
 const cleanupAuditKey = 'cleanup_audit_v1';
 const cleanupMonitoringKey = 'cleanup_monitoring_url_v1';
@@ -1457,49 +1472,58 @@ const App: React.FC = () => {
 
   const handleCreateEmailForwarding = async () => {
     if (!api || !selectedSubdomain) return;
-    let forwardTo;
-    if (forwardingType === 'default') {
-      if (mailboxAutoLoginEmail && mailboxAutoLoginEmail !== 'teknomail@virgilian.com') {
-        forwardTo = mailboxAutoLoginEmail;
-        console.log('Using Firestore mailbox email for forwarding:', forwardTo);
-      } else {
-        forwardTo = 'tekno@dollicons.com'; // Default to the correct email
-        console.log('Using fallback email for forwarding:', forwardTo);
-      }
-    } else {
-      forwardTo = customForwardEmail.trim();
-    }
-    if (!forwardTo) {
-      setError('Alamat tujuan harus diisi.');
-      return;
-    }
 
     const localPart = emailLocalPart.trim() || `user-${Math.random().toString(36).slice(2, 8)}`;
     const domainName = settings?.name.replace(/\.$/, '');
     const email = `${localPart}@${selectedSubdomain}.${domainName}`;
 
+    // Inbox self-host: kirim email masuk langsung ke Email Worker (bukan forward
+    // ke mailbox pihak ketiga). Nama Worker via localStorage 'inbox_worker_name'.
+    const selfHosted = mailboxApiBase !== 'https://api.mail.gw';
+    let forwardTo = '';
+    if (!selfHosted) {
+      if (forwardingType === 'default') {
+        if (mailboxAutoLoginEmail && mailboxAutoLoginEmail !== 'teknomail@virgilian.com') {
+          forwardTo = mailboxAutoLoginEmail;
+        } else {
+          forwardTo = 'tekno@dollicons.com';
+        }
+      } else {
+        forwardTo = customForwardEmail.trim();
+      }
+      if (!forwardTo) {
+        setError('Alamat tujuan harus diisi.');
+        return;
+      }
+    }
+
     try {
       setEmailCreationLoading(true);
-      // Create destination address if not verified (Cloudflare requires verification for some addresses, 
-      // but if forwarding to internal or already verified ones it's fine. 
-      // For this wizard, we assume 'teknomail@virgilian.com' is valid/verified or we try to create it.)
-      // Note: Cloudflare API might require the destination address to be created/verified first.
-      // We'll attempt to list addresses and check.
-      const existingAddr = addresses.find(a => a.email === forwardTo);
-      if (!existingAddr) {
+      let ruleActions: any[];
+      if (selfHosted) {
+        let workerName = 'cloudmail-inbox';
+        try {
+          const wn = localStorage.getItem('inbox_worker_name');
+          if (wn && wn.trim()) workerName = wn.trim();
+        } catch {}
+        ruleActions = [{ type: 'worker', value: [workerName] }];
+      } else {
+        // Create destination address if not verified (Cloudflare requires
+        // verification for some addresses).
+        const existingAddr = addresses.find(a => a.email === forwardTo);
+        if (!existingAddr) {
           try {
-             await api.createAddress(forwardTo);
-             // It might need verification.
-             // If it's the default one, we assume it's verified or we can't automate it fully without user interaction (clicking email link).
-             // We'll proceed to create rule and catch error.
+            await api.createAddress(forwardTo);
           } catch {}
+        }
+        ruleActions = [{ type: 'forward', value: [forwardTo] }];
       }
 
       await api.createRule({
         name: `Route ${email}`,
         enabled: true,
         matchers: [{ type: 'literal', field: 'to', value: email }],
-        actions: [{ type: 'forward', value: [forwardTo] }],
+        actions: ruleActions,
         priority: 0
       });
 

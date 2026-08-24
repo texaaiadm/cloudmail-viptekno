@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+dist/
+wrangler.local.toml
+_parsecheck.mjs
+test.eml
