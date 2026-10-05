@@ -14,11 +14,11 @@
     },
     {
       "source": "/admin",
-      "destination": "/index.html"
+      "destination": "/admin.html"
     },
     {
       "source": "/admin/:path*",
-      "destination": "/index.html"
+      "destination": "/admin.html"
     },
     {
       "source": "/:path*",

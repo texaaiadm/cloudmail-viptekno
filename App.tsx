@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CloudflareCredentials, Settings, Address, EmailRoutingRule, DNSRecord, ZoneDnsRecord, ApiResponse } from './types';
 import { CloudflareService } from './services/cloudflareApi';
+import { loadStoredCredentials, fetchRemoteCredentials, parseCredsFromContent } from './services/credentials';
 import { Layout } from './components/Layout';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
@@ -104,43 +105,9 @@ type MemberRecord = {
   createdAt?: string;
 };
 
-const parseCredsFromContent = (content: string) => {
-  const emailMatch = content.match(/Email\s*:\s*([^\s\r\n]+)/i);
-  const apiKeyMatch = content.match(/(?:Global API Key \/ Token|API Key|ApiKey)\s*:\s*([^\s\r\n]+)/i);
-  const zoneIdMatch = content.match(/Zone ID\s*:\s*([^\s\r\n]+)/i);
-  const accountIdMatch = content.match(/Account ID\s*:\s*([^\s\r\n]+)/i);
-  const mailboxMatch = content.match(/Mailbox\s*:\s*([^\s\r\n]+)/i);
-
-  let password = '';
-  const pwMatch1 = content.match(/Mailbox Password\s*:\s*([^\s\r\n]+)/i);
-  const pwMatch2 = content.match(/password\s*:\s*([^\s\r\n]+)/i);
-  if (pwMatch1) {
-    password = pwMatch1[1];
-  } else if (pwMatch2) {
-    password = pwMatch2[1];
-  }
-
-  return {
-    email: emailMatch ? emailMatch[1] : '',
-    apiKey: apiKeyMatch ? apiKeyMatch[1] : '',
-    zoneId: zoneIdMatch ? zoneIdMatch[1] : '',
-    accountId: accountIdMatch ? accountIdMatch[1] : '',
-    mailbox: mailboxMatch ? mailboxMatch[1] : '',
-    mailboxPassword: password
-  };
-};
-
 const App: React.FC = () => {
   // --- Credentials & API ---
-  const loadCredentials = (): CloudflareCredentials | null => {
-    try {
-      const saved = localStorage.getItem('cf_creds');
-      if (!saved) return null;
-      return JSON.parse(saved);
-    } catch {
-      return null;
-    }
-  };
+  const loadCredentials = (): CloudflareCredentials => loadStoredCredentials();
 
   const isAdminRoute = window.location.pathname.startsWith('/admin');
   const [activeTab, setActiveTab] = useState(isAdminRoute ? 'members' : 'subdomains');
@@ -190,6 +157,7 @@ const App: React.FC = () => {
 
   const [isVoucherVerified, setIsVoucherVerified] = useState(false);
   const [voucherInput, setVoucherInput] = useState('');
+  const [showVoucherInput, setShowVoucherInput] = useState(false);
   const [voucherError, setVoucherError] = useState<string | null>(null);
   const [voucherLoading, setVoucherLoading] = useState(false);
 
@@ -226,7 +194,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleVerifyVoucher = async () => {
-    if (!api || !settings) {
+    if (!api) {
       setVoucherError('Sistem sedang memuat konfigurasi server, silakan tunggu sebentar lalu coba lagi.');
       return;
     }
@@ -237,14 +205,14 @@ const App: React.FC = () => {
     setVoucherLoading(true);
     setVoucherError(null);
     try {
-      const domainName = settings.name.replace(/\.$/, '');
+      const domainName = (settings?.name || 'teknoaiglobal.me').replace(/\.$/, '');
       const zoneRecords = await api.listZoneDnsRecords();
       const records = zoneRecords.result || [];
       const memberPrefix = `_member.${domainName}`;
       
       const memberRecord = records.find((r: any) => 
          r.type === 'TXT' && 
-         r.name === memberPrefix && 
+         (r.name === memberPrefix || r.name.startsWith('_member.')) && 
          r.content && 
          r.content.includes(`email:${voucherInput}`)
       );
@@ -507,51 +475,20 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const loadCreds = async () => {
-      // Membaca mailbox auto-login dari local storage atau fallback ke default
-      let defaultMailboxEmail = 'teknomailvip@wshu.net';
-      let defaultMailboxPassword = 'teknoaiglobal';
+      // 1. Initial stored credentials (with automatic fallback)
+      const stored = loadStoredCredentials();
+      setCredentials(stored);
+      setFetchedCredentials(stored);
+      setMailboxAutoLoginEmail(stored.mailbox || 'inbox@teknoaiglobal.me');
+      setMailboxAutoLoginPassword(stored.mailboxPassword || 'teknoaiglobal');
 
-      const localCreds = localStorage.getItem('cf_creds');
-      if (localCreds) {
-        try {
-          const parsed = JSON.parse(localCreds);
-          setCredentials(parsed);
-          setFetchedCredentials(parsed);
-          if (parsed.mailbox) {
-            defaultMailboxEmail = parsed.mailbox;
-          }
-          if (parsed.mailboxPassword) {
-            defaultMailboxPassword = parsed.mailboxPassword;
-          }
-        } catch {}
-      }
-
-      setMailboxAutoLoginEmail(defaultMailboxEmail);
-      setMailboxAutoLoginPassword(defaultMailboxPassword);
-
-      // Fetch from Database server asynchronously to update
-      try {
-        const res = await fetch('/creds?action=get_file&filename=cloudmail');
-        if (res.ok) {
-          const data = await res.json();
-          const fileData = data.cloudmail;
-          if (fileData && typeof fileData.content === 'string') {
-            const parsed = parseCredsFromContent(fileData.content);
-            if (parsed.apiKey && parsed.zoneId) {
-              setCredentials(parsed);
-              setFetchedCredentials(parsed);
-              localStorage.setItem('cf_creds', JSON.stringify(parsed));
-              if (parsed.mailbox) {
-                setMailboxAutoLoginEmail(parsed.mailbox);
-              }
-              if (parsed.mailboxPassword) {
-                setMailboxAutoLoginPassword(parsed.mailboxPassword);
-              }
-            }
-          }
-        }
-      } catch (err: any) {
-        console.error('Failed to load credentials from database:', err);
+      // 2. Fetch from Database server asynchronously to update
+      const remote = await fetchRemoteCredentials();
+      if (remote) {
+        setCredentials(remote);
+        setFetchedCredentials(remote);
+        if (remote.mailbox) setMailboxAutoLoginEmail(remote.mailbox);
+        if (remote.mailboxPassword) setMailboxAutoLoginPassword(remote.mailboxPassword);
       }
     };
 
@@ -1812,23 +1749,6 @@ const App: React.FC = () => {
   );
 
   // --- Render ---
-  if (!credentials) {
-    return (
-      <Layout 
-        credentials={null} 
-        onSaveCredentials={saveCredentials} 
-        activeTab={activeTab} 
-        onTabChange={setActiveTab}
-        defaultCredentials={fetchedCredentials}
-      >
-        <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
-          <h2 className="text-2xl font-bold text-slate-900">Selamat Datang di Email Routing App</h2>
-          <p className="text-slate-500">Silakan masukkan kredensial Cloudflare Anda untuk memulai.</p>
-        </div>
-      </Layout>
-    );
-  }
-
   if (!isVoucherVerified) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 relative overflow-hidden">
@@ -1852,22 +1772,68 @@ const App: React.FC = () => {
              </div>
            )}
            <div className="space-y-4">
-              <Input 
-                 placeholder="Masukkan Email Voucher" 
-                 value={voucherInput}
-                 onChange={(e) => setVoucherInput(e.target.value)}
-                 className="bg-white/50"
-              />
+              <div className="relative">
+                <input 
+                   type={showVoucherInput ? "text" : "password"}
+                   placeholder="Masukkan Email Voucher" 
+                   value={voucherInput} 
+                   onChange={(e) => setVoucherInput(e.target.value)}
+                   onKeyDown={(e) => {
+                     if (e.key === 'Enter' && !voucherLoading && voucherInput) {
+                       handleVerifyVoucher();
+                     }
+                   }}
+                   className="w-full rounded-lg border border-slate-300 pl-3.5 pr-11 py-2.5 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white/70 shadow-sm transition-all font-mono"
+                   autoFocus
+                />
+                <button
+                   type="button"
+                   onClick={() => setShowVoucherInput(!showVoucherInput)}
+                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 rounded-md transition-colors"
+                   title={showVoucherInput ? "Sembunyikan / Sensor Voucher" : "Tampilkan Voucher"}
+                >
+                   {showVoucherInput ? (
+                     <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                       <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+                       <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+                       <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+                       <line x1="2" x2="22" y1="2" y2="22" />
+                     </svg>
+                   ) : (
+                     <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                       <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                       <circle cx="12" cy="12" r="3" />
+                     </svg>
+                   )}
+                </button>
+              </div>
               <Button 
                  onClick={handleVerifyVoucher} 
                  disabled={voucherLoading || !voucherInput} 
-                 className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 shadow-md shadow-blue-500/25 transition-all duration-300 transform hover:-translate-y-0.5"
+                 className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 shadow-md shadow-blue-500/25 transition-all duration-300 transform hover:-translate-y-0.5 py-2.5"
               >
                  {voucherLoading ? 'Memverifikasi...' : 'Masuk Sekarang'}
               </Button>
            </div>
         </div>
       </div>
+    );
+  }
+
+  if (!credentials) {
+    return (
+      <Layout 
+        credentials={null} 
+        onSaveCredentials={saveCredentials} 
+        activeTab={activeTab} 
+        onTabChange={setActiveTab}
+        defaultCredentials={fetchedCredentials}
+      >
+        <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
+          <h2 className="text-2xl font-bold text-slate-900">Selamat Datang di Email Routing App</h2>
+          <p className="text-slate-500">Silakan masukkan kredensial Cloudflare Anda untuk memulai.</p>
+        </div>
+      </Layout>
     );
   }
 
@@ -2301,9 +2267,6 @@ const App: React.FC = () => {
                       <h3 className="text-md font-bold text-red-800">Gagal terhubung ke Mailbox</h3>
                       <p className="text-sm text-red-600 font-mono break-all">{mailboxError}</p>
                     </div>
-                    {mailboxAutoLoginEmail && (
-                      <p className="text-xs text-slate-500">Email: <span className="font-mono">{mailboxAutoLoginEmail}</span></p>
-                    )}
                     <Button
                       onClick={() => {
                         setMailboxError(null);
@@ -2319,9 +2282,6 @@ const App: React.FC = () => {
                     <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
                     <div className="text-center space-y-2">
                       <p className="text-slate-600">Sedang login ke mailbox...</p>
-                      {mailboxAutoLoginEmail && (
-                        <p className="text-sm text-slate-500">Email: <span className="font-mono">{mailboxAutoLoginEmail}</span></p>
-                      )}
                     </div>
                     <p className="text-slate-500">Memuat Inbox...</p>
                   </>

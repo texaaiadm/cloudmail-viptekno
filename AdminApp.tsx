@@ -4,6 +4,12 @@ import { CloudflareService } from './services/cloudflareApi';
 import { Layout } from './components/Layout';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
+import { 
+  DEFAULT_CREDENTIALS, 
+  loadStoredCredentials, 
+  fetchRemoteCredentials, 
+  saveRemoteCredentials 
+} from './services/credentials';
 
 type MemberRecord = {
   id: string;
@@ -14,32 +20,6 @@ type MemberRecord = {
   cooldownHours?: number;
   cooldownEnabled?: boolean;
   createdAt?: string;
-};
-
-const parseCredsFromContent = (content: string) => {
-  const emailMatch = content.match(/Email\s*:\s*([^\s\r\n]+)/i);
-  const apiKeyMatch = content.match(/(?:Global API Key \/ Token|API Key|ApiKey)\s*:\s*([^\s\r\n]+)/i);
-  const zoneIdMatch = content.match(/Zone ID\s*:\s*([^\s\r\n]+)/i);
-  const accountIdMatch = content.match(/Account ID\s*:\s*([^\s\r\n]+)/i);
-  const mailboxMatch = content.match(/Mailbox\s*:\s*([^\s\r\n]+)/i);
-
-  let password = '';
-  const pwMatch1 = content.match(/Mailbox Password\s*:\s*([^\s\r\n]+)/i);
-  const pwMatch2 = content.match(/password\s*:\s*([^\s\r\n]+)/i);
-  if (pwMatch1) {
-    password = pwMatch1[1];
-  } else if (pwMatch2) {
-    password = pwMatch2[1];
-  }
-
-  return {
-    email: emailMatch ? emailMatch[1] : '',
-    apiKey: apiKeyMatch ? apiKeyMatch[1] : '',
-    zoneId: zoneIdMatch ? zoneIdMatch[1] : '',
-    accountId: accountIdMatch ? accountIdMatch[1] : '',
-    mailbox: mailboxMatch ? mailboxMatch[1] : '',
-    mailboxPassword: password
-  };
 };
 
 const AdminApp: React.FC = () => {
@@ -74,8 +54,7 @@ const AdminApp: React.FC = () => {
   const [credApiKey, setCredApiKey] = useState('');
   const [credZoneId, setCredZoneId] = useState('');
   const [credAccountId, setCredAccountId] = useState('');
-  const [credMailbox, setCredMailbox] = useState('');
-  const [credPassword, setCredPassword] = useState('');
+  const [credPassword, setCredPassword] = useState('teknoaiglobal');
   const [credLoading, setCredLoading] = useState(false);
   const [credMessage, setCredMessage] = useState('');
 
@@ -99,72 +78,26 @@ const AdminApp: React.FC = () => {
 
   useEffect(() => {
     const loadCreds = async () => {
-      // 1. Try to load from localStorage first
-      const localCreds = localStorage.getItem('cf_creds');
-      if (localCreds) {
-        try {
-          const parsed = JSON.parse(localCreds);
-          setCredentials(parsed);
-          setCredEmail(parsed.email || '');
-          setCredApiKey(parsed.apiKey || '');
-          setCredZoneId(parsed.zoneId || '');
-          setCredAccountId(parsed.accountId || '');
-          setCredMailbox(parsed.mailbox || 'tekno@emalupe.com');
-          setCredPassword(parsed.mailboxPassword || 'teknoaiglobal');
-        } catch (err: any) {
-          setError(err.message);
-        }
-      } else {
-        // Fallback ke default environment variables atau hardcoded fallback (untuk setup awal)
-        const envEmail = import.meta.env.VITE_CF_EMAIL || 'cloudflare@email.teknoaiglobal.com';
-        const envApiKey = import.meta.env.VITE_CF_API_KEY || 'bdf5ebe35a625271b4a1507c87aa3dfc3353c';
-        const envZoneId = import.meta.env.VITE_CF_ZONE_ID || '5ad57fb06e03cc145dee0d6efe068ce0';
-        const envAccountId = import.meta.env.VITE_CF_ACCOUNT_ID || '64775c16472d1c2fa00c0b8abce4d24e';
+      // 1. Initial stored credentials with fallback
+      const stored = loadStoredCredentials();
+      setCredentials(stored);
+      setCredEmail(stored.email || '');
+      setCredApiKey(stored.apiKey || '');
+      setCredZoneId(stored.zoneId || '');
+      setCredAccountId(stored.accountId || '');
+      setCredPassword(stored.mailboxPassword || 'teknoaiglobal');
 
-        if (envEmail && envApiKey && envZoneId) {
-          const defaultCreds = {
-            email: envEmail,
-            apiKey: envApiKey,
-            zoneId: envZoneId,
-            accountId: envAccountId
-          };
-          setCredentials(defaultCreds);
-          setCredEmail(envEmail);
-          setCredApiKey(envApiKey);
-          setCredZoneId(envZoneId);
-          setCredAccountId(envAccountId);
-        }
-
-        // set defaults
-        setCredMailbox('tekno@emalupe.com');
-        setCredPassword('teknoaiglobal');
+      // 2. Fetch from Database server asynchronously to update
+      const remote = await fetchRemoteCredentials();
+      if (remote) {
+        setCredentials(remote);
+        setCredEmail(remote.email || '');
+        setCredApiKey(remote.apiKey || '');
+        setCredZoneId(remote.zoneId || '');
+        setCredAccountId(remote.accountId || '');
+        if (remote.mailboxPassword) setCredPassword(remote.mailboxPassword);
       }
-
-      // 2. Fetch from Database server asynchronously
-      try {
-        const res = await fetch('/creds?action=get_file&filename=cloudmail');
-        if (res.ok) {
-          const data = await res.json();
-          const fileData = data.cloudmail;
-          if (fileData && typeof fileData.content === 'string') {
-            const parsed = parseCredsFromContent(fileData.content);
-            if (parsed.apiKey && parsed.zoneId) {
-              setCredentials(parsed);
-              setCredEmail(parsed.email || '');
-              setCredApiKey(parsed.apiKey || '');
-              setCredZoneId(parsed.zoneId || '');
-              setCredAccountId(parsed.accountId || '');
-              setCredMailbox(parsed.mailbox || 'tekno@emalupe.com');
-              setCredPassword(parsed.mailboxPassword || 'teknoaiglobal');
-              localStorage.setItem('cf_creds', JSON.stringify(parsed));
-            }
-          }
-        }
-      } catch (err: any) {
-        console.error('Failed to load credentials from database:', err);
-      } finally {
-        setLoading(false);
-      }
+      setLoading(false);
     };
 
     loadCreds();
@@ -356,37 +289,20 @@ const AdminApp: React.FC = () => {
     setCredLoading(true);
     setCredMessage('');
     try {
-      const newCreds = {
+      const newCreds: CloudflareCredentials = {
         email: credEmail,
         apiKey: credApiKey,
         zoneId: credZoneId,
         accountId: credAccountId,
-        mailbox: credMailbox,
-        mailboxPassword: credPassword
+        mailbox: 'inbox@teknoaiglobal.me',
+        mailboxPassword: credPassword || 'teknoaiglobal'
       };
 
-      // 1. Simpan ke local storage
-      localStorage.setItem('cf_creds', JSON.stringify(newCreds));
+      const success = await saveRemoteCredentials(newCreds);
       setCredentials(newCreds);
 
-      // 2. Simpan ke database server
-      const contentString = `Email : ${credEmail}
-Global API Key / Token : ${credApiKey}
-Zone ID : ${credZoneId}
-Account ID : ${credAccountId}
-Mailbox : ${credMailbox} password : ${credPassword}`;
-
-      const res = await fetch('/creds?action=save_file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: 'cloudmail',
-          content: contentString
-        })
-      });
-
-      if (!res.ok) {
-        throw new Error('Gagal menyimpan ke database server');
+      if (!success) {
+        throw new Error('Gagal menyimpan ke database server, tetapi tersimpan di browser');
       }
 
       setCredMessage('Kredensial berhasil disimpan di database server & browser!');
@@ -462,8 +378,6 @@ Mailbox : ${credMailbox} password : ${credPassword}`;
                         <Input label="Global API Key / Token" type="password" value={credApiKey} onChange={e => setCredApiKey(e.target.value)} />
                         <Input label="Zone ID" value={credZoneId} onChange={e => setCredZoneId(e.target.value)} />
                         <Input label="Account ID" value={credAccountId} onChange={e => setCredAccountId(e.target.value)} />
-                        <Input label="Mailbox Email" value={credMailbox} onChange={e => setCredMailbox(e.target.value)} />
-                        <Input label="Mailbox Password" type="text" value={credPassword} onChange={e => setCredPassword(e.target.value)} />
                     </div>
                     {credMessage && <div className="mb-4 p-3 bg-green-50 text-green-700 rounded-lg text-sm">{credMessage}</div>}
                     <Button onClick={handleSaveCredentials} disabled={credLoading} className="w-full md:w-auto bg-slate-800 hover:bg-slate-900">

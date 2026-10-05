@@ -17,18 +17,47 @@ interface LayoutProps {
   onVoucherLogin?: () => void;
 }
 
+const EyeIcon: React.FC<{ className?: string }> = ({ className = "w-3.5 h-3.5" }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+const EyeOffIcon: React.FC<{ className?: string }> = ({ className = "w-3.5 h-3.5" }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+    <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+    <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+    <line x1="2" x2="22" y1="2" y2="22" />
+  </svg>
+);
+
+const maskVoucher = (val?: string): string => {
+  if (!val) return '';
+  if (val.includes('@')) {
+    const [name, domain] = val.split('@');
+    if (name.length <= 2) return `${name[0]}•••@${domain}`;
+    return `${name.slice(0, 2)}••••${name.slice(-1)}@${domain}`;
+  }
+  if (val.length <= 3) return '••••';
+  if (val.length <= 5) return `${val.slice(0, 1)}••••${val.slice(-1)}`;
+  return `${val.slice(0, 2)}••••${val.slice(-2)}`;
+};
+
 export const Layout: React.FC<LayoutProps> = ({ 
   children, 
   credentials, 
   onSaveCredentials, 
   activeTab, 
-  onTabChange,
+  onTabChange, 
   defaultCredentials,
   isVoucherVerified,
   voucherEmail,
   onVoucherLogout
 }) => {
   const [showConfig, setShowConfig] = useState(false);
+  const [showVoucherDetail, setShowVoucherDetail] = useState(false);
   const [form, setForm] = useState<CloudflareCredentials>(
     credentials || { 
       email: defaultCredentials?.email || '', 
@@ -213,12 +242,27 @@ export const Layout: React.FC<LayoutProps> = ({
             {/* Voucher Status */}
             <div className="flex items-center gap-2 mr-2">
               {isVoucherVerified ? (
-                <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-1.5">
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="text-xs font-medium text-green-700 truncate max-w-[120px] hidden sm:inline">{voucherEmail}</span>
+                <div className="flex items-center gap-1.5 bg-green-50 border border-green-200 rounded-lg px-2.5 py-1.5 shadow-sm">
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <span 
+                    className="text-xs font-mono font-medium text-green-700 truncate max-w-[130px] hidden sm:inline select-none cursor-pointer"
+                    onClick={() => setShowVoucherDetail(!showVoucherDetail)}
+                    title={showVoucherDetail ? "Klik untuk sensor voucher" : "Klik untuk melihat voucher"}
+                  >
+                    {showVoucherDetail ? voucherEmail : maskVoucher(voucherEmail)}
+                  </span>
+                  <button 
+                    type="button"
+                    onClick={() => setShowVoucherDetail(!showVoucherDetail)}
+                    className="text-green-600 hover:text-green-800 transition-colors p-0.5 rounded hover:bg-green-100 hidden sm:inline-flex items-center justify-center"
+                    title={showVoucherDetail ? "Sensor Voucher" : "Tampilkan Voucher"}
+                  >
+                    {showVoucherDetail ? <EyeOffIcon className="w-3.5 h-3.5" /> : <EyeIcon className="w-3.5 h-3.5" />}
+                  </button>
+                  <span className="text-slate-300 text-xs hidden sm:inline">|</span>
                   <button 
                     onClick={onVoucherLogout}
-                    className="text-xs text-red-500 hover:text-red-700 font-medium ml-1"
+                    className="text-xs text-red-500 hover:text-red-700 font-medium hover:underline"
                     title="Logout Voucher"
                   >
                     Keluar
